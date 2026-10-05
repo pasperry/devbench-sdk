@@ -54,12 +54,25 @@ jobs:
           ruby-version: '3.3'
       - uses: rubygems/configure-rubygems-credentials@v1.0.0
       - run: gem build devbench.gemspec
-      - run: gem push "devbench-${{ needs.check.outputs.version }}.gem"
+      # Idempotent, like npm: a re-run after a partial release skips what is
+      # already out instead of failing on it.
+      - run: |
+          v="${{ needs.check.outputs.version }}"
+          if gem list --remote --exact devbench --all | grep -qE "[( ]$v[,)]"; then
+            echo "devbench $v is already on RubyGems; skipping"
+          else
+            gem push "devbench-$v.gem"
+          fi
 
   npm:
     needs: [check, test]
     runs-on: ubuntu-latest
     environment: release
+    env:
+      # npm publish runs prepublishOnly (typecheck, tests, size); the vector
+      # tests need the shared testdata. Missing it failed the v0.6.0 npm step.
+      DEVBENCH_TESTDATA: ${{ github.workspace }}/testdata
+      ADT_REQUIRE_VECTORS: '1'
     permissions:
       contents: read
       id-token: write # npm trusted publishing (OIDC): no token exists to leak
@@ -103,7 +116,13 @@ jobs:
       # Modules in subdirectories are versioned by path-prefixed tags.
       - run: |
           v="v${{ needs.check.outputs.version }}"
-          git tag "go/$v" "$GITHUB_SHA"
-          tags="go/$v"
-          if [ -f go/gin/go.mod ]; then git tag "go/gin/$v" "$GITHUB_SHA"; tags="$tags go/gin/$v"; fi
-          git push origin $tags
+          git fetch --tags -q origin
+          tags=""
+          for t in "go/$v" $( [ -f go/gin/go.mod ] && echo "go/gin/$v" ); do
+            if git rev-parse -q --verify "refs/tags/$t" >/dev/null; then
+              echo "$t already exists; skipping"
+            else
+              git tag "$t" "$GITHUB_SHA"; tags="$tags $t"
+            fi
+          done
+          [ -z "$tags" ] || git push origin $tags
