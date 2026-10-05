@@ -73,12 +73,18 @@ jobs:
           gem install --no-document activejob -v '~> 8.0.0'
           gem install --no-document sidekiq -v '~> 7.3.0'
           gem install --no-document minitest
-      - name: tests (warnings from lib/ fail the build)
+      - name: tests (warnings or skips fail the build)
+        shell: bash
         run: |
+          set -o pipefail
           for f in test/*_test.rb; do
             echo "== $f"
-            ruby -w -Ilib -Itest "$f" 2> >(tee /tmp/stderr.txt >&2)
-            if grep -q "$(pwd)/lib/.*warning:" /tmp/stderr.txt; then echo "warnings from lib/"; exit 1; fi
+            ruby -w -Ilib -Itest "$f" 2> >(tee /tmp/stderr.txt >&2) | tee /tmp/stdout.txt
+            if grep -q "$(pwd)/lib/.*warning:" /tmp/stderr.txt; then echo "warnings from lib/ in $f"; exit 1; fi
+            # Every dependency is installed and required: a skip means a test
+            # did not run, which is how the Sidekiq service-name tests went
+            # unexercised in this repo's CI.
+            if grep -qE ', [1-9][0-9]* skips' /tmp/stdout.txt; then echo "skipped tests in $f"; exit 1; fi
           done
       - run: gem build devbench.gemspec
 

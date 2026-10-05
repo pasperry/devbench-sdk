@@ -229,7 +229,9 @@ class TransportSelectionTest < Minitest::Test
   # from the web process with no DEVBENCH_SERVICE. Each in a fresh process,
   # with real Sidekiq (and real Rails for the app name).
   def sidekiq_service(env = {}, rails: false)
-    gems = rails ? %w[rails sidekiq] : %w[sidekiq]
+    # railties, not the rails meta-gem: it is what provides `require "rails"`,
+    # and what CI installs.
+    gems = rails ? %w[railties sidekiq] : %w[sidekiq]
     available = gems.all? { |g| Gem::Specification.find_all_by_name(g).any? }
     unless available
       flunk "#{gems.join(' and ')} required here" if ENV['ADT_REQUIRE_SIDEKIQ']
