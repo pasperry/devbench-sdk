@@ -1,24 +1,27 @@
 # Dev Bench for Ruby and Rails
 
 Everything Sentry's Rails SDK captures by default, plus who was affected,
-trace propagation and the handled-failure header — so an app can turn
-Sentry off. Zero runtime dependencies; loads in plain Ruby, hooks itself
+the server log lines of a failing request, the browser sensor, trace
+propagation and the handled-failure header — so an app can turn Sentry
+off. Zero runtime dependencies; loads in plain Ruby, hooks itself
 into Rails when Rails is there.
 
 ## Install (Rails)
 
-```ruby
-# Gemfile
-gem 'devbench'
+```sh
+bundle add devbench
+bin/rails generate devbench
 ```
+
+Then set **one** value in the app's environment — the DSN `adt dsn create`
+printed for this environment:
 
 ```sh
-# The DSN Dev Bench gave you for this environment
-DEVBENCH_DSN=https://<key>@adt-ingest.onrender.com
+DEVBENCH_DSN=https://<public>:<secret>@adt-ingest.onrender.com
 ```
 
-That is the whole install. No middleware line, no initializer, no process
-to run next to the app. Check it:
+That is the whole install: no browser key, no sidecar, no service names,
+no initializer, no middleware line. Check it:
 
 ```sh
 bin/rails devbench:test
@@ -30,16 +33,51 @@ It prints the HTTP result, or says plainly what is wrong (`DEVBENCH_DSN is
 not set`, `HTTP 401: the key in DEVBENCH_DSN was rejected`, `could not reach
 …`) and exits non-zero. Outside Rake: `Devbench.test!`.
 
+What the generator does, and nothing else (run it again and nothing
+changes):
+
+- puts `<%= devbench_script_tag %>` in `app/views/layouts/application.html.erb`
+  just before `</head>` (`.haml` / `.slim`: `= devbench_script_tag` as the
+  last line of `head`). Without that layout it prints what to add where.
+- if `config/initializers/content_security_policy.rb` defines a policy,
+  adds `https://unpkg.com` to `script_src`, and the ingest host and
+  `https://*.storage.supabase.co` (evidence uploads) to `connect_src`.
+
+### The browser tag
+
+`devbench_script_tag` renders the browser sensor, version-pinned to this
+gem (upgrading the gem upgrades the sensor), with **only the public part**
+of `DEVBENCH_DSN`:
+
+```html
+<script src="https://unpkg.com/devbench@0.6.0/dist/devbench.min.js"
+        data-dsn="https://<public>@adt-ingest.onrender.com" data-release="<release>" defer></script>
+```
+
+The secret never reaches a page. Without a DSN (or with a 0.5 single-key
+DSN, or `DEVBENCH_ENABLED=false`) it renders nothing at all, so a
+development or test environment without a DSN serves no tag. If the app
+uses CSP nonces (`content_security_policy_nonce_generator`), the tag
+carries the request's nonce.
+
+**CSP:** if your policy is defined somewhere other than the standard
+initializer, add these yourself:
+
+```ruby
+policy.script_src  ..., "https://unpkg.com"
+policy.connect_src ..., "https://adt-ingest.onrender.com", "https://*.storage.supabase.co"
+```
+
 ## Configuration
 
 All optional except the DSN.
 
 | Variable | Default | |
 |---|---|---|
-| `DEVBENCH_DSN` | — (falls back to `ADT_DSN`) | `https://<key>@<host>[:port]`. Plain `http://` is accepted only for localhost. |
-| `DEVBENCH_SERVICE` | your app's module, underscored (`AcmeShop` → `acme_shop`); `app` outside Rails | Groups this app's issues. |
+| `DEVBENCH_DSN` | — (falls back to `ADT_DSN`) | `https://<public>:<secret>@<host>[:port]` from `adt dsn create`. The server authenticates with the secret; the page gets the public part. A 0.5 `https://<key>@<host>` still works (no browser tag, see below). Plain `http://` is accepted only for localhost. |
+| `DEVBENCH_SERVICE` | your app's module, underscored (`AcmeShop` → `acme_shop`); `app` outside Rails; **`<that>-sidekiq` in a Sidekiq process** | Groups this app's issues. Set it and it wins everywhere. |
 | `DEVBENCH_RELEASE` | `GIT_SHA`, `SOURCE_VERSION`, `RENDER_GIT_COMMIT`, else empty | Which deploy an occurrence came from. |
-| `DEVBENCH_ENABLED` | on | `false` turns everything off: no middleware, no hooks, nothing sent. |
+| `DEVBENCH_ENABLED` | on | `false` turns everything off: no middleware, no hooks, no tag, nothing sent. |
 
 Or from code, e.g. `config/initializers/devbench.rb`:
 
@@ -51,7 +89,7 @@ end
 ```
 
 A DSN that does not parse logs one `[devbench]` warning and reports
-nothing; it never raises into the app.
+nothing; it never raises into the app. Neither key is ever printed.
 
 ## What is captured automatically
 
@@ -94,8 +132,9 @@ Like the browser sensor, the gem does not send one request per error:
   Dev Bench sensor). Repeats cost a counter increment.
 - **Once a minute** a background thread sends the counts — fingerprint,
   how many, first/last seen, and up to 20 affected users each — in one
-  small request. Nothing is sent for a quiet minute, and what is left is
-  sent when the process exits (waiting at most 2 seconds).
+  small request. Nothing is sent for a quiet minute (except a small poll
+  while the process holds log lines, below), and what is left is sent
+  when the process exits (waiting at most 2 seconds).
 - **Detail only on request.** When Dev Bench sees a fingerprint for the
   first time it asks for evidence, and the gem uploads the stack and one
   example message — **templated and scrubbed first** (emails, numbers,
@@ -106,6 +145,33 @@ Like the browser sensor, the gem does not send one request per error:
   memory is bounded (512 distinct problems per minute, the rest only
   counted). Safe under forking servers (Puma, Unicorn, Sidekiq): each
   worker reports on its own.
+
+## Server log lines
+
+Triage reads the server's log lines for the user action that failed. With
+`DEVBENCH_DSN` set, the gem keeps them itself — no sidecar:
+
+- **What:** every line written to `Rails.logger` and `Sidekiq.logger`
+  while a request or job carries a trace (`x-adt-trace` from the browser
+  sensor; a job inherits the trace of the request that enqueued it).
+  Untraced lines are not kept. Rails 7.1+: a capturing logger joins
+  `Rails.logger`'s broadcast (it follows the app's level and `silence`,
+  and writes nothing); older Rails and `Sidekiq.logger`: a tee after the
+  logger's own write. **What your logger writes is unchanged.**
+- **Bounded:** per process, the newest 10,000 lines or 4 MiB, nothing older
+  than 15 minutes, 4 KiB per line. A logging call is never blocked on I/O
+  and never raises because of this.
+- **Sent only when asked:** when Dev Bench asks for a trace, the flush
+  thread sends that trace's lines from this process — the newest ≤ 200
+  lines / 64 KiB — **redacted first** with the same strict rules as
+  evidence (quoted values, numbers, emails, cards, tokens, credentials,
+  IPs and two-word names removed), plus any redaction rules Dev Bench has
+  learned for your app. A process holding lines it was not asked about
+  sends nothing but a small poll once a minute while it holds them.
+- **Forking servers:** each Puma worker and Sidekiq process keeps and
+  answers for its own lines; Dev Bench assembles them.
+
+A Rack app without Rails: `Devbench.capture_logs(logger)`.
 
 ## Who was affected
 
@@ -198,11 +264,12 @@ browser cannot read `x-adt-handled` unless the server lists it in
 than overwrites. **A CORS layer that replaces the response header set will
 strip it** and detection will silently never fire; check the ordering.
 
-## Optional: the sidecar (server logs)
+## Optional: the sidecar
 
 The Dev Bench sidecar is a separate process that reads your app's log
 stream on the host and answers triage's requests for the log lines of one
-user action. It is optional; nothing above needs it.
+user action. It is optional: with a DSN the gem keeps those lines itself
+(above). It remains for setups that cannot load the gem.
 
 Without a DSN, the gem reports to the sidecar's unix socket instead
 (`$ADT_SIDECAR_SOCKET`, default `/tmp/adt-sidecar.sock`), exactly as 0.4
@@ -211,6 +278,26 @@ both**: with a DSN set, a sidecar on the same host still reads logs, but the
 gem does not also write to its socket, so nothing is counted twice.
 Fingerprints are identical in both modes, so moving between them keeps
 every issue.
+
+## Upgrading from 0.5
+
+Nothing is required: a 0.5 single-key `DEVBENCH_DSN` keeps reporting
+exactly as before. To get server log lines and the browser tag from the
+same value, mint a pair and replace the DSN:
+
+```sh
+adt dsn create --tenant <tenant> --environment production
+# https://<public>:<secret>@adt-ingest.onrender.com
+```
+
+then run `bin/rails generate devbench` for the tag and CSP. A page that
+loaded the browser sensor with its own DSN can drop that and use the tag.
+
+One default changed: a Sidekiq process without `DEVBENCH_SERVICE` now
+reports as `<app>-sidekiq` (it was `<app>`), so job failures are grouped
+apart from web failures — and an existing job issue reappears once under
+the new name. Set `DEVBENCH_SERVICE` in the Sidekiq process to keep the
+old name.
 
 ## Upgrading from `adt` (0.4)
 
@@ -221,5 +308,5 @@ every issue.
 - `config.middleware.insert_before 0, ADT::Middleware` can stay or go: the
   Railtie sees it and does not insert a second one.
 - Running the sidecar and want to keep it that way? Change nothing else.
-  To report directly instead, set `DEVBENCH_DSN` (a key minted with
-  `--source server`); the sidecar then only serves logs.
+  To report directly instead, set `DEVBENCH_DSN` (from `adt dsn create`);
+  see "Upgrading from 0.5".

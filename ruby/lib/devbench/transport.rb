@@ -3,6 +3,7 @@
 require_relative 'config'
 require_relative 'sidecar_transport'
 require_relative 'direct'
+require_relative 'logs'
 
 # Configuration and transport selection (docs/SERVER_SDK_SPEC.md,
 # "Transports: direct (default) or sidecar (optional)").
@@ -17,8 +18,6 @@ require_relative 'direct'
 # Never both: a sidecar on the same host still reads logs, but writing to
 # its socket as well would count every report twice.
 module Devbench
-  # Raised (and rescued) by Devbench.test! to make its synthetic report.
-  class TestException < StandardError; end
 
   TRANSPORT_LOCK = Mutex.new
   CONFIG_LOCK = Mutex.new
@@ -42,6 +41,9 @@ module Devbench
     def configure
       yield config if block_given?
       reset_transport!
+      # Hooks already in place follow the new configuration: on in direct
+      # mode, inert otherwise.
+      Logs.hooked? && direct? ? Logs.activate! : Logs.deactivate!
       nil
     rescue StandardError, SystemStackError => e
       warn_once(:configure, "Devbench.configure raised #{e.class}; reporting is unchanged")
@@ -58,6 +60,64 @@ module Devbench
     # initializer is seen.
     def transport
       @transport || TRANSPORT_LOCK.synchronize { @transport ||= build_transport }
+    end
+
+    # The DSN the browser sensor may hold — https://<public>@host — derived
+    # from DEVBENCH_DSN, so a page needs no setting of its own. Nil when the
+    # DSN has no public part (a 0.5 single-key DSN: that key is a server
+    # secret), does not parse, or reporting is disabled. Never raises, and
+    # never returns anything carrying the secret.
+    def browser_dsn
+      cfg = config
+      return nil unless cfg.enabled?
+
+      raw = cfg.dsn.to_s
+      cached = @browser_dsn
+      return cached[1] if cached && cached[0] == raw
+
+      value = raw.strip.empty? ? nil : DSN.parse(raw).browser_dsn
+      @browser_dsn = [raw, value]
+      value
+    rescue StandardError, SystemStackError
+      nil
+    end
+
+    # Where the browser sensor connects, for the app's CSP connect_src:
+    # the ingest host from DEVBENCH_DSN and evidence storage. Read when the
+    # CSP initializer runs, so the policy follows the DSN instead of a host
+    # frozen at generate time; empty when there is no usable DSN, so an app
+    # without Dev Bench configured (e.g. production) keeps its policy as is.
+    # `bin/rails generate devbench` adds `*Devbench.csp_connect_sources`.
+    STORAGE_SOURCE = 'https://*.storage.supabase.co'
+
+    def csp_connect_sources
+      return [] if browser_dsn.nil?
+
+      [DSN.parse(config.dsn.to_s).base, STORAGE_SOURCE]
+    rescue StandardError, SystemStackError
+      []
+    end
+
+    # True when this process reports straight to Dev Bench (a DSN is set
+    # and parses). Builds the transport if it was not built yet.
+    def direct?
+      transport.is_a?(DirectTransport)
+    rescue StandardError, SystemStackError
+      false
+    end
+
+    # Keeps recent lines from these loggers, per trace, for triage to ask
+    # for (direct mode only; elsewhere a no-op). The Railtie does this for
+    # Rails.logger and Sidekiq.logger; a Rack app without Rails calls it
+    # itself. Returns true when capture is on. Never raises.
+    def capture_logs(*loggers)
+      return false unless enabled? && direct?
+
+      hooked = loggers.flatten.map { |l| Logs.install(l) }.compact
+      Logs.activate! unless hooked.empty?
+      Logs.active?
+    rescue StandardError, SystemStackError
+      false
     end
 
     # Sends whatever direct mode has counted, now, waiting at most `timeout`
@@ -81,7 +141,7 @@ module Devbench
       end
       if cfg.dsn.nil? || cfg.dsn.strip.empty?
         io.puts 'DEVBENCH_DSN is not set. Set it to the DSN Dev Bench gave you for this ' \
-                'environment (https://<key>@<host>), or call Devbench.configure { |c| c.dsn = ... }.'
+                'environment (https://<public>:<secret>@<host>, from `adt dsn create`), or call Devbench.configure { |c| c.dsn = ... }.'
         return false
       end
 
@@ -92,14 +152,8 @@ module Devbench
         return false
       end
 
-      error = begin
-        raise TestException, 'Dev Bench test exception: if you can read this, the DSN works'
-      rescue TestException => e
-        e
-      end
-      payload = Reporter.report_for(error, context: 'explicit', handled: true, symbol: 'devbench:test')
       client = DirectTransport.new(dsn: dsn, service: cfg.resolved_service, release: cfg.resolved_release)
-      client.self_test(payload, io)
+      client.self_test(io)
     rescue StandardError, SystemStackError => e
       io.puts "Dev Bench test failed: #{e.class}: #{e.message}"
       false
@@ -110,6 +164,7 @@ module Devbench
     # Devbench.configure.
     def reset!
       reset_transport!
+      Logs.deactivate!
       CONFIG_LOCK.synchronize { @config = nil }
       nil
     end

@@ -11,11 +11,14 @@
 //  3. ReportHandled at failure sites
 //  4. The verify probe
 //  5. Identity — WithUser
+//  6. Server log lines for triage, captured in-process in direct mode —
+//     NewLogHandler (slog), LogWriter / Logger (the log package); logs.go
 //
 // Typical setup:
 //
 //	devbench.Init(devbench.Options{}) // optional: DEVBENCH_DSN is read on first use
 //	defer devbench.Close(context.Background())
+//	slog.SetDefault(slog.New(devbench.NewLogHandler(slog.Default().Handler())))
 //
 //	mux := http.NewServeMux()
 //	mux.HandleFunc("GET /deals/{id}", showDeal)

@@ -142,3 +142,31 @@ test('existing installs: endpoint + tenant + ingestKey still flush exactly as be
   assert.equal(req.headers['x-adt-key'], 'adt_client_legacy');
   assert.equal((JSON.parse(req.body) as FlushRequest).tenant, 'acme');
 });
+
+// DECISIONS #161: the server DSN carries a secret. Pasted into a page it
+// must disable the sensor and say why — never quietly use the public half,
+// which would leave the secret shipped and unnoticed.
+test('a server DSN (public:secret) is refused in the browser, and nothing is sent', async (t) => {
+  const server = await startTestServer();
+  t.after(() => server.close());
+  resetForTests();
+  const host = server.url.replace('http://', '');
+
+  const d = parseDsn(`https://adt_client_pub:adt_server_SECRET@${host}`);
+  assert.equal(typeof d, 'string');
+  assert.match(d as string, /server DSN/);
+  assert.doesNotMatch(d as string, /adt_server_SECRET/, 'the reason must not echo the secret');
+
+  let s!: Sensor;
+  const warnings = await captureWarnings(() => {
+    s = new Sensor({ dsn: `http://adt_client_pub:adt_server_SECRET@${host}`, release: 'r1', autoFlush: false });
+  });
+  assert.equal(s.enabled, false);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /server DSN/);
+  assert.ok(!warnings[0]!.includes('SECRET'), 'the warning must not print the secret');
+
+  s.record('error', 'TypeError', 'boom');
+  await s.flush();
+  assert.equal(server.received.length, 0, 'a refused sensor sent something');
+});

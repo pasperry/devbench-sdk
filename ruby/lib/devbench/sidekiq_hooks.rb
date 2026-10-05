@@ -101,6 +101,10 @@ module Devbench
 
         handlers = config.error_handlers
         handlers << ERROR_HANDLER unless handlers.any? { |h| h.equal?(ERROR_HANDLER) }
+
+        # The job's own log lines (Sidekiq::Job#logger), kept under the
+        # job's trace — direct mode only, a no-op otherwise.
+        Devbench.capture_logs(config.logger) if config.respond_to?(:logger)
         true
       rescue StandardError, SystemStackError
         false

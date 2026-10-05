@@ -33,9 +33,18 @@ export function parseDsn(raw: unknown): Dsn | string {
   const m = SHAPE.exec(raw.trim());
   if (!m) return 'expected https://<key>@host[:port]';
 
+  // A server DSN is https://<public>:<secret>@host (DECISIONS #161). Its
+  // secret must never reach a page: refuse it outright rather than use the
+  // public half, so the mistake is seen and the secret gets rotated.
+  const userinfo = m[2] ?? '';
+  if (userinfo.includes(':')) {
+    return 'this is a server DSN: it contains a secret key and must not be used in a browser. ' +
+      'Use the public form https://<public key>@host (the Rails helper renders it), and rotate this DSN if it was ever shipped to a page';
+  }
+
   let key: string;
   try {
-    key = decodeURIComponent(m[2] ?? '');
+    key = decodeURIComponent(userinfo);
   } catch {
     return 'the key is not valid percent-encoding';
   }

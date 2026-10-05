@@ -25,11 +25,14 @@ type ingest struct {
 	mu      sync.Mutex
 	counts  []map[string]any
 	bundles []map[string]any
+	// needLogs is asked for on every flush; slices is what /v1/logs got.
+	needLogs []string
+	slices   map[string][]string
 }
 
 func newIngest(t *testing.T) *ingest {
 	t.Helper()
-	in := &ingest{}
+	in := &ingest{slices: map[string][]string{}}
 	asked := map[string]bool{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/flush", func(w http.ResponseWriter, r *http.Request) {
@@ -39,8 +42,12 @@ func newIngest(t *testing.T) *ingest {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		var reply struct {
 			NeedEvidence []map[string]any `json:"need_evidence"`
+			NeedLogs     []map[string]any `json:"need_logs,omitempty"`
 		}
 		in.mu.Lock()
+		for _, k := range in.needLogs {
+			reply.NeedLogs = append(reply.NeedLogs, map[string]any{"trace": k})
+		}
 		for _, c := range body.Counts {
 			in.counts = append(in.counts, c)
 			fp, _ := c["fp"].(string)
@@ -51,6 +58,25 @@ func newIngest(t *testing.T) *ingest {
 		}
 		in.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(reply)
+	})
+	mux.HandleFunc("/v1/logs", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Slices []struct {
+				Trace string   `json:"trace"`
+				Lines []string `json:"lines"`
+			} `json:"slices"`
+		}
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil {
+			http.Error(w, "malformed request", http.StatusBadRequest)
+			return
+		}
+		in.mu.Lock()
+		for _, s := range body.Slices {
+			in.slices[s.Trace] = append(in.slices[s.Trace], s.Lines...)
+		}
+		in.mu.Unlock()
 	})
 	mux.HandleFunc("/put/", func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)

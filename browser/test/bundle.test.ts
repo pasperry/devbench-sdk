@@ -16,6 +16,9 @@ import type { FlushRequest } from '../src/transport.js';
 
 const BUNDLES = ['dist/devbench.min.js', 'dist/devbench.js', 'dist/adt.iife.js'];
 
+// Whatever package.json declares: the bundle must report the same version.
+const PKG_VERSION: string = JSON.parse(readFileSync('package.json', 'utf8')).version;
+
 interface Api {
   VERSION: string;
   Sensor: new (opts: Record<string, unknown>) => { record(k: string, t: string, m: string): void; flush(): Promise<void>; stop(): void };
@@ -53,7 +56,7 @@ for (const file of BUNDLES) {
     const { g } = load(file, null);
     assert.equal(typeof g.Devbench, 'object');
     assert.equal(g.ADT, g.Devbench, 'ADT must be an alias of Devbench, not a copy');
-    assert.equal(g.Devbench!.VERSION, '0.5.0');
+    assert.equal(g.Devbench!.VERSION, PKG_VERSION);
     for (const name of ['init', 'setUser', 'registerAngular', 'getSensor', 'close', 'Sensor', 'installErrorCapture', 'registerAngularModule']) {
       assert.equal(typeof (g.Devbench as unknown as Record<string, unknown>)[name], 'function', `Devbench.${name}`);
     }

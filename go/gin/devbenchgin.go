@@ -8,6 +8,13 @@
 // re-panicked, so gin's Recovery still answers 500 exactly as before. Dev
 // Bench observes; it never swallows.
 //
+// The request's trace is bound to c.Request.Context() (and to c itself), so
+// with the core SDK's slog handler installed, lines a handler logs with
+// either context are captured under the request's trace in direct mode:
+//
+//	slog.SetDefault(slog.New(devbench.NewLogHandler(slog.Default().Handler())))
+//	slog.InfoContext(c.Request.Context(), "charging card")  // or slog.InfoContext(c, ...)
+//
 // Everything else is the core SDK's: trace propagation, devbench.WithUser,
 // devbench.ReportHandled (and the x-adt-handled response header it drives),
 // devbench.CaptureException, Init, Close.
@@ -29,6 +36,12 @@ func Middleware() gin.HandlerFunc {
 			// The request now carries the SDK's context (trace, scope,
 			// handled counter); handlers must see it through c.Request.
 			c.Request = req
+			// So log calls given the gin.Context itself are keyed too:
+			// gin.Context.Value only reads c.Keys for a string key, and
+			// reaches the request's context only with ContextWithFallback.
+			if t, ok := devbench.FromContext(req.Context()); ok {
+				c.Set(devbench.TraceContextKey, t)
+			}
 			// Responses go through Handled's writer so the handled count is
 			// stamped before the status line, whichever gin method writes.
 			orig := c.Writer

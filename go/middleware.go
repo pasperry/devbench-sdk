@@ -2,12 +2,17 @@ package devbench
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 )
 
 // Middleware accepts the correlation id, binds it to the request context, and
 // reports panics.
+//
+// The trace bound to r.Context() is what keys in-process log capture: a
+// record logged with that context (slog.InfoContext(r.Context(), ...))
+// through NewLogHandler is kept under the request's trace. A request with
+// no (or a malformed) x-adt-trace header has no trace and nothing is kept
+// for it — no failure Dev Bench triages can ever ask for its lines.
 //
 // It never rejects a request and never alters the response. A diagnostics
 // middleware that can fail a request is worse than no diagnostics.
@@ -47,31 +52,4 @@ func Middleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
-}
-
-// LogHandler wraps a slog.Handler so every record carries the active trace.
-//
-// This is what makes the sidecar's index work: the trace has to reach the log
-// line, or there is nothing to index by and client evidence cannot be joined
-// to server logs (ARCHITECTURE_PROPOSAL.md risk #9).
-type LogHandler struct {
-	slog.Handler
-}
-
-// NewLogHandler wraps h.
-func NewLogHandler(h slog.Handler) *LogHandler { return &LogHandler{Handler: h} }
-
-func (h *LogHandler) Handle(ctx context.Context, r slog.Record) error {
-	if t, ok := FromContext(ctx); ok {
-		r.AddAttrs(slog.String("adt_trace", t.String()))
-	}
-	return h.Handler.Handle(ctx, r)
-}
-
-func (h *LogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &LogHandler{Handler: h.Handler.WithAttrs(attrs)}
-}
-
-func (h *LogHandler) WithGroup(name string) slog.Handler {
-	return &LogHandler{Handler: h.Handler.WithGroup(name)}
 }

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'fingerprint'
+require_relative 'egress_policy'
 
 module Devbench
   # A port of the sidecar's strict egress (internal/scrub and
@@ -109,25 +110,62 @@ module Devbench
       end
 
       # The sidecar's forEgress in strict mode, for one line: any trace kept
-      # as is, the rest templated, scrubbed and prose-masked.
-      def egress(line)
+      # as is, the rest templated, scrubbed and prose-masked — then the
+      # learned rules (an EgressPolicy), exactly as Sidecar.redactBody
+      # applies them:
+      #
+      #   shape 'none'   the content never leaves: <withheld:shape:<fp12>>
+      #   shape 'full'   lifts only the prose heuristic, never base redaction
+      #   shape 'masked' prose heuristic (already on in strict mode)
+      #   field / term   masked afterwards, whatever the shape rule says
+      #
+      # Shape rules are keyed by the line's shape fingerprint, as the sidecar
+      # computes it (log_template / sidecar / service / the trace-stripped
+      # line).
+      def egress(line, policy = nil, service = '')
         line = utf8(line)
         match = TRACE.match(line)
         body = match ? line.gsub(TRACE, '<trace>') : line
-        redacted = strict(body)
+        fp, rule = shape_rule(policy, service, body)
+        redacted = if rule == EgressPolicy::NONE
+                     withheld(fp)
+                   else
+                     redact_body(body, rule, policy)
+                   end
         match ? "[#{match[0]}] #{redacted}" : redacted
       end
 
       # A bundle's template text: as the sidecar's answerEvidenceRequests
-      # does, strict redaction and then a second shape pass.
-      def template_text(text)
-        self.text(strict(utf8(text)))
+      # does, the shape's own rule (by the signal's fingerprint), strict
+      # redaction, and then a second shape pass. Empty when the shape's
+      # content never leaves.
+      def template_text(text, policy = nil, fp = nil)
+        rule = policy && fp ? policy.rule_for(fp) : nil
+        return '' if rule == EgressPolicy::NONE
+
+        self.text(redact_body(utf8(text), rule, policy))
+      end
+
+      # What stands in for a line whose shape is marked 'none'.
+      def withheld(fp)
+        "<withheld:shape:#{fp.to_s[0, 12]}>"
       end
 
       private
 
-      def strict(body)
-        prose(text(Fingerprint.template(body)))
+      # Base redaction (template + scrub), the prose heuristic unless the
+      # shape is marked 'full', then field and term rules.
+      def redact_body(body, rule, policy)
+        redacted = text(Fingerprint.template(body))
+        redacted = prose(redacted) unless rule == EgressPolicy::FULL
+        policy ? policy.mask(redacted) : redacted
+      end
+
+      def shape_rule(policy, service, body)
+        return [nil, nil] if policy.nil? || !policy.shapes?
+
+        fp = Fingerprint.compute(kind: 'log_template', source: 'sidecar', service: service.to_s, message: body)
+        fp ? [fp, policy.rule_for(fp)] : [nil, nil]
       end
 
       def proper_noun?(token)

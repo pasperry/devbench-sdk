@@ -65,6 +65,7 @@ type fakeIngest struct {
 	mu       sync.Mutex
 	attempts int // every request to /v1/flush, accepted or not
 	flushes  []gotFlush
+	checks   []string // keys sent to POST /v1/check
 	puts     []gotPut
 	asked    map[string]bool
 
@@ -75,6 +76,29 @@ type fakeIngest struct {
 	askEvidence bool
 	// delay holds every flush this long before answering.
 	delay time.Duration
+
+	// needLogs is sent as need_logs on every accepted flush, as ingest
+	// does for a server key while slice requests are pending.
+	needLogs []string
+	// logsOnlyOnPoll hands need_logs out only on an empty flush (a poll),
+	// so a test can prove the poll is what gets the request answered.
+	logsOnlyOnPoll bool
+	// redaction, when non-nil, is sent verbatim as the `redaction` field
+	// (a JSON array); nil omits the field.
+	redaction json.RawMessage
+	// logs is every accepted POST /v1/logs.
+	logs []gotLogs
+}
+
+type gotLogs struct {
+	Key  string
+	Size int
+	Body struct {
+		Slices []struct {
+			Trace string   `json:"trace"`
+			Lines []string `json:"lines"`
+		} `json:"slices"`
+	}
 }
 
 func newFakeIngest(t *testing.T) *fakeIngest {
@@ -82,10 +106,29 @@ func newFakeIngest(t *testing.T) *fakeIngest {
 	f := &fakeIngest{asked: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/flush", f.flush)
+	mux.HandleFunc("/v1/logs", f.acceptLogs)
+	mux.HandleFunc("/v1/check", f.check)
 	mux.HandleFunc("/evidence/", f.put)
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
+}
+
+// check is ingest's POST /v1/check (the SDK self-test): the status follows
+// respond like a flush; it records nothing but the call.
+func (f *fakeIngest) check(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	f.checks = append(f.checks, r.Header.Get("X-ADT-Key"))
+	respond := f.respond
+	f.mu.Unlock()
+	status := http.StatusOK
+	if respond != nil {
+		status = respond(1)
+	}
+	w.WriteHeader(status)
+	if status == http.StatusOK {
+		_, _ = w.Write([]byte(`{"ok":true,"tenant":"acme","environment":"test","source":"server"}`))
+	}
 }
 
 // dsn is a DSN pointing at this server with key k.
@@ -129,8 +172,10 @@ func (f *fakeIngest) flush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "malformed request", http.StatusBadRequest)
 		return
 	}
-	if len(body.Counts) == 0 {
-		http.Error(w, "no counts", http.StatusBadRequest) // a server key may not poll
+	// A server key may poll with an empty flush (DECISIONS #161), written
+	// as the spec writes it: "counts": [].
+	if len(body.Counts) == 0 && !bytes.Contains(raw, []byte(`"counts":[]`)) {
+		http.Error(w, "no counts", http.StatusBadRequest)
 		return
 	}
 
@@ -140,8 +185,13 @@ func (f *fakeIngest) flush(w http.ResponseWriter, r *http.Request) {
 		URL     string `json:"url"`
 		Expires int64  `json:"expires"`
 	}
+	type logAsk struct {
+		Trace string `json:"trace"`
+	}
 	var reply struct {
-		NeedEvidence []ask `json:"need_evidence,omitempty"`
+		NeedEvidence []ask           `json:"need_evidence,omitempty"`
+		NeedLogs     []logAsk        `json:"need_logs,omitempty"`
+		Redaction    json.RawMessage `json:"redaction,omitempty"`
 	}
 
 	f.mu.Lock()
@@ -149,6 +199,12 @@ func (f *fakeIngest) flush(w http.ResponseWriter, r *http.Request) {
 		Key: r.Header.Get("X-ADT-Key"), ContentType: r.Header.Get("content-type"),
 		Size: len(raw), Body: body,
 	})
+	if !f.logsOnlyOnPoll || len(body.Counts) == 0 {
+		for _, k := range f.needLogs {
+			reply.NeedLogs = append(reply.NeedLogs, logAsk{Trace: k})
+		}
+	}
+	reply.Redaction = f.redaction
 	if f.askEvidence {
 		for _, c := range body.Counts {
 			if f.asked[c.FP] {
@@ -166,6 +222,68 @@ func (f *fakeIngest) flush(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(reply)
+}
+
+// acceptLogs is ingest's POST /v1/logs: strict decoding (unknown fields
+// rejected), its body limit, its 25-slice limit.
+func (f *fakeIngest) acceptLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 256<<10+1))
+	if err != nil || len(raw) > 256<<10 {
+		http.Error(w, "too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	got := gotLogs{Key: r.Header.Get("X-ADT-Key"), Size: len(raw)}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&got.Body); err != nil {
+		http.Error(w, "malformed request", http.StatusBadRequest)
+		return
+	}
+	if len(got.Body.Slices) > 25 {
+		http.Error(w, "too many slices in one delivery", http.StatusBadRequest)
+		return
+	}
+	f.mu.Lock()
+	f.logs = append(f.logs, got)
+	f.mu.Unlock()
+	w.Header().Set("content-type", "application/json")
+	_, _ = io.WriteString(w, `{"ok":true}`)
+}
+
+// askLogs sets the trace keys every later flush response asks for.
+func (f *fakeIngest) askLogs(keys ...string) {
+	f.mu.Lock()
+	f.needLogs = keys
+	f.mu.Unlock()
+}
+
+// setRedaction sets the `redaction` field of later flush responses: a JSON
+// array, or "" to omit the field.
+func (f *fakeIngest) setRedaction(raw string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if raw == "" {
+		f.redaction = nil
+		return
+	}
+	f.redaction = json.RawMessage(raw)
+}
+
+// delivered flattens every accepted slice: trace -> lines, in arrival order.
+func (f *fakeIngest) delivered() (map[string][]string, []gotLogs) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string][]string{}
+	for _, l := range f.logs {
+		for _, s := range l.Body.Slices {
+			out[s.Trace] = append(out[s.Trace], s.Lines...)
+		}
+	}
+	return out, append([]gotLogs(nil), f.logs...)
 }
 
 func (f *fakeIngest) put(w http.ResponseWriter, r *http.Request) {

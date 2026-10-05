@@ -586,7 +586,9 @@ func TestDirect_NeverAlsoWritesToTheSidecar(t *testing.T) {
 	s.expectNone(t, 200*time.Millisecond)
 }
 
-func TestTest_SendsOneSyntheticExceptionAndUploadsItsEvidence(t *testing.T) {
+// The self-test checks the key and records nothing: a synthetic exception
+// would become a real issue on a new customer's punch list.
+func TestTest_ChecksTheKeyAndRecordsNothing(t *testing.T) {
 	f := newFakeIngest(t)
 	f.askEvidence = true
 	useDirect(t, f)
@@ -595,15 +597,14 @@ func TestTest_SendsOneSyntheticExceptionAndUploadsItsEvidence(t *testing.T) {
 		t.Fatalf("Test = %v", err)
 	}
 	_, flushes, puts := f.snapshot()
-	if len(flushes) != 1 || len(flushes[0].Body.Counts) != 1 {
-		t.Fatalf("flushes = %+v", flushes)
+	f.mu.Lock()
+	checks := append([]string(nil), f.checks...)
+	f.mu.Unlock()
+	if len(checks) != 1 || checks[0] == "" {
+		t.Fatalf("checks = %v, want one with the key", checks)
 	}
-	c := flushes[0].Body.Counts[0]
-	if c.Kind != "error" || c.N != 1 {
-		t.Errorf("count = %+v", c)
-	}
-	if len(puts) != 1 || !strings.Contains(string(puts[0].Raw), "devbench.TestException") {
-		t.Errorf("evidence = %v", puts)
+	if len(flushes) != 0 || len(puts) != 0 {
+		t.Errorf("a self-test created %d flush(es) and %d upload(s); it must create nothing", len(flushes), len(puts))
 	}
 }
 

@@ -3,6 +3,7 @@
 require_relative 'middleware'
 require_relative 'rails_hooks'
 require_relative 'sidekiq_hooks'
+require_relative 'view_helper'
 
 module Devbench
   # Hooks Dev Bench into Rails at boot. Loaded by lib/devbench.rb only when
@@ -40,6 +41,11 @@ module Devbench
       nil
     end
 
+    # <%= devbench_script_tag %> in any view or layout.
+    initializer 'devbench.view_helper' do
+      ActiveSupport.on_load(:action_view) { include Devbench::ViewHelper }
+    end
+
     # rake devbench:test — check the DSN without waiting for a flush.
     rake_tasks do
       namespace :devbench do
@@ -62,12 +68,27 @@ module Devbench
         # Native Sidekiq jobs never reach the ActiveJob hook. after_initialize
         # runs after every gem is required, so Gemfile order does not matter.
         Devbench::SidekiqHooks.install if defined?(::Sidekiq)
+
+        # Server log lines for triage, kept in-process (direct mode only).
+        # After the app's initializers, so the logger they configured is the
+        # one hooked.
+        Devbench::Railtie.capture_logs
       rescue StandardError, SystemStackError
         nil
       end
     end
 
     class << self
+      # Rails.logger, plus Sidekiq's logger when Sidekiq is loaded. A no-op
+      # unless reporting is direct.
+      def capture_logs
+        loggers = [::Rails.logger]
+        loggers << ::Sidekiq.logger if defined?(::Sidekiq) && ::Sidekiq.respond_to?(:logger)
+        Devbench.capture_logs(loggers.compact)
+      rescue StandardError, SystemStackError
+        false
+      end
+
       # Records the conditional insert on a MiddlewareStackProxy. Returns
       # true when recorded.
       def auto_insert(proxy)

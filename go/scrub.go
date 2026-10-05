@@ -160,13 +160,9 @@ func strictRedact(body string) string {
 
 // egressLine is Sidecar.forEgress for one line in strict mode with no
 // learned rules: a trace in the line is lifted out and put back in front.
+// With rules, see egressLineWith (rules.go).
 func egressLine(line string) string {
-	raw := egressTraceRe.FindString(line)
-	if raw == "" {
-		return strictRedact(line)
-	}
-	body := egressTraceRe.ReplaceAllString(line, "<trace>")
-	return "[" + raw + "] " + strictRedact(body)
+	return egressLineWith(nil, "", line)
 }
 
 // egressTemplate is how the sidecar prepares a bundle's template text:

@@ -62,6 +62,10 @@ class DealsController < ActionController::Base
   def ok
     render plain: 'ok'
   end
+
+  def page
+    render inline: '<head><%= devbench_script_tag %></head>'
+  end
 end
 
 # CSRF failure: a 422, not a failure to report.
@@ -79,5 +83,6 @@ AdtRailsTestApp.routes.draw do
   get '/reported' => 'deals#reported'
   get '/enqueue' => 'deals#enqueue'
   get '/ok' => 'deals#ok'
+  get '/page' => 'deals#page'
   put '/forms/:id' => 'forms#update'
 end

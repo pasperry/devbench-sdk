@@ -2,8 +2,9 @@
 
 # Dev Bench server SDK for Ruby/Rails (formerly "ADT"; DECISIONS #160).
 #
-#   gem 'devbench'          # Gemfile
-#   DEVBENCH_DSN=https://<key>@<ingest host>
+#   bundle add devbench
+#   bin/rails generate devbench
+#   DEVBENCH_DSN=https://<public>:<secret>@<ingest host>   (from `adt dsn create`)
 #
 # What it does:
 #   * accepts and forwards the correlation id  (Devbench::Middleware, Devbench::HTTP)
@@ -12,6 +13,8 @@
 #   * reports unhandled exceptions             (Devbench::Middleware, Devbench::Railtie,
 #                                               Devbench::SidekiqHooks,
 #                                               Devbench.capture_exception)
+#   * keeps recent log lines per trace         (Devbench::Logs; direct mode)
+#   * renders the browser sensor's tag         (devbench_script_tag)
 #
 # The old name is kept: `require 'adt'` and every `ADT.` / `ADT::` call in an
 # existing install resolve to this module.
@@ -27,6 +30,8 @@ require_relative 'devbench/session'
 require_relative 'devbench/session_middleware'
 require_relative 'devbench/rails_hooks'
 require_relative 'devbench/sidekiq_hooks'
+require_relative 'devbench/logs'
+require_relative 'devbench/view_helper'
 
 # The pre-0.5 name. The same module object, not a copy: ADT::Middleware *is*
 # Devbench::Middleware, so a stack holding either holds the one class.

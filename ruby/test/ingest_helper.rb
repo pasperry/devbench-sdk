@@ -21,6 +21,17 @@ class FakeIngest
   attr_accessor :flush_status
   # When true, every fp in a flush is answered with a need_evidence ask.
   attr_accessor :ask_evidence
+  # Trace keys (session/intent) every flush response asks lines for, as
+  # ingest's need_logs does for a pending log slice request.
+  attr_accessor :need_logs
+  # The learned rule set every flush response carries (`redaction`), or nil
+  # to omit the field, as ingest does when it could not look rules up.
+  attr_accessor :redaction
+  # When true, need_logs is offered only on an empty flush (a poll), so a
+  # test proves the poll is what answered.
+  attr_accessor :need_logs_only_on_poll
+  # Status for POST /v1/logs (default 200).
+  attr_accessor :logs_status
 
   def initialize
     @server = TCPServer.new('127.0.0.1', 0)
@@ -30,6 +41,9 @@ class FakeIngest
     @arrived = ConditionVariable.new
     @flush_status = 200
     @ask_evidence = false
+    @need_logs = []
+    @redaction = nil
+    @logs_status = 200
     @asked = {}
     @acceptor = Thread.new { accept_loop }
     @acceptor.report_on_exception = false
@@ -43,6 +57,11 @@ class FakeIngest
     "http://#{key}@127.0.0.1:#{@port}"
   end
 
+  # The DSN `adt dsn create` prints: public (browser) key : secret (server) key.
+  def pair_dsn(public_key = 'adt_client_testpub', secret = 'adt_server_testsecret')
+    "http://#{public_key}:#{secret}@127.0.0.1:#{@port}"
+  end
+
   def requests
     @lock.synchronize { @requests.dup }
   end
@@ -53,6 +72,17 @@ class FakeIngest
 
   def evidence
     requests.select { |r| r.method == 'PUT' }
+  end
+
+  def log_deliveries
+    requests.select { |r| r.method == 'POST' && r.path == '/v1/logs' }
+  end
+
+  # Every slice delivered so far, {trace => [lines]}, in arrival order.
+  def slices
+    log_deliveries.flat_map { |r| r.json['slices'] }.each_with_object({}) do |sl, out|
+      (out[sl['trace']] ||= []).concat(sl['lines'])
+    end
   end
 
   # Waits until `n` requests matching the block have arrived.
@@ -125,10 +155,25 @@ class FakeIngest
       return [status, '{"error":"unauthorized"}'] if status == 401
       return [status, '{"error":"nope"}'] unless (200..299).cover?(status)
 
-      [status, JSON.generate(asks_for(request))]
+      offer = !@need_logs_only_on_poll || request.json['counts'].empty?
+      [status, JSON.generate(asks_for(request).merge(offer ? log_asks : {}))]
+    elsif request.method == 'POST' && request.path == '/v1/check'
+      status = @flush_status.respond_to?(:call) ? @flush_status.call(request) : @flush_status
+      return [status, '{"error":"unauthorized"}'] unless (200..299).cover?(status)
+
+      [status, '{"ok":true,"tenant":"acme","environment":"test","source":"server"}']
+    elsif request.method == 'POST' && request.path == '/v1/logs'
+      [@logs_status, (200..299).cover?(@logs_status) ? '{"ok":true}' : '{"error":"nope"}']
     else
       [404, '{}']
     end
+  end
+
+  def log_asks
+    out = {}
+    out[:need_logs] = @need_logs.map { |k| { trace: k } } unless @need_logs.empty?
+    out[:redaction] = @redaction unless @redaction.nil?
+    out
   end
 
   # At most one ask per fingerprint, as ingest's evidence claim does.

@@ -17,6 +17,12 @@ func TestParseDSN(t *testing.T) {
 		{"https://k123@ingest.example.com:8443/ignored/path?x=1", "https://ingest.example.com:8443", "k123"},
 		{"http://k@127.0.0.1:9000", "http://127.0.0.1:9000", "k"},
 		{"  https://k@h.example  ", "https://h.example", "k"},
+		// The pair (DECISIONS #161): a server sends the secret, never the
+		// public key.
+		{"https://pub_123:sec_456@adt-ingest.onrender.com", "https://adt-ingest.onrender.com", "sec_456"},
+		{"http://pub:sec@127.0.0.1:9000/ignored", "http://127.0.0.1:9000", "sec"},
+		{"http://pub:sec@localhost:9000", "http://localhost:9000", "sec"},
+		{"http://pub:sec@[::1]:9000", "http://[::1]:9000", "sec"},
 	}
 	for _, c := range good {
 		base, key, err := parseDSN(c.dsn)
@@ -26,13 +32,16 @@ func TestParseDSN(t *testing.T) {
 	}
 
 	for _, bad := range []string{
-		"adt-ingest.onrender.com",            // no scheme
-		"https://adt-ingest.onrender.com",    // no key
-		"ftp://k@adt-ingest.onrender.com",    // wrong scheme
-		"https://k@",                         // no host
-		"https://:secret@host.example",       // empty username
-		"://k@host",                          // unparseable
-		"https://k%zz@host.example/broken%%", // malformed escapes
+		"adt-ingest.onrender.com",                // no scheme
+		"https://adt-ingest.onrender.com",        // no key
+		"ftp://k@adt-ingest.onrender.com",        // wrong scheme
+		"https://k@",                             // no host
+		"https://:secret@host.example",           // empty username
+		"://k@host",                              // unparseable
+		"https://k%zz@host.example/broken%%",     // malformed escapes
+		"https://pub:@host.example",              // a pair whose secret is empty
+		"http://pub:sec@adt-ingest.onrender.com", // the secret in plaintext over a network
+		"http://pub:sec@10.0.0.5:8080",           // ditto, a private address is still a network
 	} {
 		if _, _, err := parseDSN(bad); err == nil {
 			t.Errorf("parseDSN(%q) accepted an invalid DSN", bad)
@@ -155,6 +164,71 @@ func TestInit_InvalidDSNLogsOnceAndDisables(t *testing.T) {
 	if n := strings.Count(out, "invalid DSN"); n != 1 {
 		t.Errorf("logged %d times, want once:\n%s", n, out)
 	}
+}
+
+// The pair DSN end to end at the wire: the flush carries the secret, never
+// the public key, and nothing the SDK logs ever contains the secret — not
+// even when the DSN is broken in a way that makes it complain.
+func TestPairDSN_SendsTheSecretAndNeverLogsIt(t *testing.T) {
+	f := newFakeIngest(t)
+	resetSDK(t)
+
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	prev := log.Writer()
+	log.SetOutput(writerFunc(func(p []byte) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return buf.Write(p)
+	}))
+	t.Cleanup(func() { log.SetOutput(prev) })
+	logged = sync.Map{}
+
+	const public, secret = "pub_live_9f3a", "srv_live_77c1d0"
+	dsn := strings.Replace(f.srv.URL, "://", "://"+public+":"+secret+"@", 1)
+	if err := Init(Options{DSN: dsn, Service: "billing"}); err != nil {
+		t.Fatalf("Init(pair): %v", err)
+	}
+	if Mode() != "direct" {
+		t.Fatalf("Mode = %s, want direct", Mode())
+	}
+	ReportHandled(context.Background(), errors.New("x"), "pair.DSN")
+	flushNow(t)
+
+	_, flushes, _ := f.snapshot()
+	if len(flushes) != 1 || flushes[0].Key != secret {
+		t.Fatalf("flushes = %d, key %q; want one flush sent with the secret", len(flushes), keyOf(flushes))
+	}
+
+	// Broken pairs complain without quoting either key.
+	for _, bad := range []string{
+		"ftp://" + public + ":" + secret + "@host.example",
+		"https://" + public + ":" + secret + "@",
+	} {
+		err := Init(Options{DSN: bad})
+		if err == nil {
+			t.Fatalf("Init(%q) accepted a broken DSN", bad)
+		}
+		if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), public) {
+			t.Errorf("error quotes a key: %v", err)
+		}
+	}
+	mu.Lock()
+	out := buf.String()
+	mu.Unlock()
+	if out == "" {
+		t.Fatal("precondition: a broken DSN logged nothing, so this cannot show the secret stays out of logs")
+	}
+	if strings.Contains(out, secret) || strings.Contains(out, public) {
+		t.Errorf("the log quotes a key:\n%s", out)
+	}
+}
+
+func keyOf(fl []gotFlush) string {
+	if len(fl) == 0 {
+		return ""
+	}
+	return fl[0].Key
 }
 
 type writerFunc func([]byte) (int, error)

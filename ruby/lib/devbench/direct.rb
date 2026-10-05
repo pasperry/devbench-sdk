@@ -6,11 +6,15 @@ require 'securerandom'
 require 'uri'
 require_relative 'fingerprint'
 require_relative 'scrub'
+require_relative 'egress_policy'
+require_relative 'logs'
 
 module Devbench
   # Direct mode (docs/SERVER_SDK_SPEC.md, "Direct mode"): fingerprint and
   # count in-process, flush counts to ingest once a minute, upload one
-  # redacted evidence bundle per fingerprint only when ingest asks. The same
+  # redacted evidence bundle per fingerprint only when ingest asks, and
+  # answer ingest's requests for the log lines of a trace (need_logs) from
+  # the in-process buffer (Devbench::Logs), redacted. The same
   # phase-1/phase-2 protocol as the browser sensor, and the same signals and
   # bundle the sidecar builds from the equivalent control message, so a
   # customer can move between modes without forking an issue.
@@ -37,6 +41,13 @@ module Devbench
     MAX_FRAMES = 50
     MAX_IDENTITY = 255
     MAX_RESPONSE_BYTES = 64 * 1024
+    # Log slices (spec: <= 500 lines per slice). 200 and 64 KiB are what the
+    # store keeps of a slice; sending more would spend the customer's
+    # bandwidth on lines truncated on arrival. 25 slices is what one
+    # delivery may carry.
+    MAX_SLICE_LINES = 200
+    MAX_SLICE_BYTES = 64 * 1024
+    MAX_SLICES_PER_POST = 25
     HTTP_TIMEOUT = 5.0
     EXIT_TIMEOUT = 2.0
 
@@ -52,6 +63,11 @@ module Devbench
       @release = release.to_s
       @interval = interval.to_f.positive? ? interval.to_f : 60.0
       @flush_uri = URI(dsn.flush_url)
+      @logs_uri = URI(dsn.logs_url)
+      @check_uri = URI(dsn.check_url)
+      # Learned redaction rules from the last response that carried a set.
+      # Not per process: a forked child keeps them until ingest re-sends.
+      @policy = nil
       @fork_lock = Mutex.new
       @stopped = false
       reset_state
@@ -100,6 +116,10 @@ module Devbench
       nil
     end
 
+    # The learned rules in force (an EgressPolicy), or nil before any
+    # arrived. For tests and diagnostics.
+    attr_reader :policy
+
     # Counts not yet flushed, by fingerprint. For tests and diagnostics.
     def pending
       @lock.synchronize { @window.transform_values { |c| c.n } }
@@ -108,14 +128,13 @@ module Devbench
     # rake devbench:test. Sends one synthetic exception straight to ingest
     # (not via the background thread), uploads its evidence if asked, and
     # prints what happened. Returns true when ingest accepted it.
-    def self_test(payload, io)
-      signal = signal_for(payload)
-      now = Time.now.to_i
-      body = bodies({ signal.fp => Count.new(signal.kind, 1, now, now, [], 0) }, 0).first
-      remember(signal)
-
-      io.puts "Dev Bench: sending a test exception to #{@dsn} (service #{@service.inspect})"
-      response, error = attempt(:post, @flush_uri, body, flush_headers, HTTP_TIMEOUT)
+    # The self-test (Devbench.test!): asks ingest whether this DSN's key is
+    # valid, and for which tenant and environment. Creates nothing — it used
+    # to send a synthetic exception, which became a real issue on a new
+    # customer's punch list.
+    def self_test(io)
+      io.puts "Dev Bench: checking the DSN against #{@dsn} (service #{@service.inspect})"
+      response, error = attempt(:post, @check_uri, '{}', flush_headers, HTTP_TIMEOUT)
       if error
         io.puts "  could not reach #{@dsn}: #{error.class}: #{error.message}"
         return false
@@ -127,12 +146,24 @@ module Devbench
         return false
       end
 
-      io.puts "  HTTP #{code}: accepted (fingerprint #{signal.fp[0, 12]})"
-      asks(response).each do |ask|
-        res = upload(ask, monotonic + HTTP_TIMEOUT)
-        io.puts(res ? "  evidence uploaded (HTTP #{res.code})" : '  evidence upload failed')
+      info = begin
+        JSON.parse(response.body.to_s)
+      rescue JSON::ParserError
+        {}
       end
+      io.puts "  HTTP #{code}: accepted — tenant #{info['tenant'].inspect}, environment " \
+              "#{info['environment'].inspect}. Nothing was recorded; real errors will appear as issues."
       true
+    end
+
+    # Starts the background flush thread if it is not running (in this
+    # process). Called when this process first holds a log line, so a
+    # worker that reports nothing still polls for log requests.
+    def start
+      ensure_running
+      nil
+    rescue StandardError, SystemStackError
+      nil
     end
 
     private
@@ -303,6 +334,9 @@ module Devbench
 
     # ---- Flushing
 
+    # Phase 1, then whatever the responses asked for: learned rules first
+    # (a rule arriving with a request for the shape it governs applies to
+    # that request), then log slices, then evidence.
     def flush_cycle(deadline)
       counts, overflowed = @lock.synchronize do
         taken = [@window, @overflowed]
@@ -310,11 +344,22 @@ module Devbench
         @overflowed = 0
         taken
       end
-      return true if counts.empty?
+      # Nothing counted: poll only while this process holds traced lines,
+      # since need_logs only rides a flush response (the sidecar's poll).
+      # Holding none, send nothing.
+      if counts.empty?
+        return true unless Logs.holding?
+
+        posts = [envelope([], 0)]
+      else
+        posts = bodies(counts, overflowed)
+      end
 
       ok = true
       wanted = []
-      bodies(counts, overflowed).each do |body|
+      log_keys = []
+      rules = nil
+      posts.each do |body|
         response = request(:post, @flush_uri, body, flush_headers, deadline)
         if response.nil?
           ok = false
@@ -322,12 +367,17 @@ module Devbench
         end
         code = response.code.to_i
         if (200..299).cover?(code)
-          wanted.concat(asks(response))
+          answer = answers(response)
+          wanted.concat(answer[:evidence])
+          log_keys.concat(answer[:logs])
+          rules = answer[:redaction] unless answer[:redaction].nil?
         else
           ok = false
           Devbench.warn_once(:"http_#{code}", "Dev Bench refused a flush: HTTP #{code}: #{explain(code, response)}")
         end
       end
+      @policy = EgressPolicy.compile(rules) unless rules.nil?
+      deliver_logs(log_keys.uniq, deadline) unless log_keys.empty?
       wanted.each { |ask| upload(ask, deadline) }
       ok
     end
@@ -369,15 +419,114 @@ module Devbench
     end
 
     def asks(response)
+      answers(response)[:evidence]
+    end
+
+    # What a flush response asked for: evidence (need_evidence), log slices
+    # (need_logs trace keys) and the learned rule set (redaction: an array,
+    # or nil when the response carried none — which leaves the rules in
+    # force, unlike an empty array, which withdraws them).
+    def answers(response)
+      none = { evidence: [], logs: [], redaction: nil }
       body = response.body.to_s
-      return [] if body.empty? || body.bytesize > MAX_RESPONSE_BYTES
+      return none if body.empty? || body.bytesize > MAX_RESPONSE_BYTES
 
       parsed = JSON.parse(body)
-      list = parsed.is_a?(Hash) ? parsed['need_evidence'] : nil
-      list.is_a?(Array) ? list.select { |a| a.is_a?(Hash) } : []
+      return none unless parsed.is_a?(Hash)
+
+      evidence = parsed['need_evidence']
+      logs = parsed['need_logs']
+      redaction = parsed['redaction']
+      {
+        evidence: evidence.is_a?(Array) ? evidence.select { |a| a.is_a?(Hash) } : [],
+        logs: logs.is_a?(Array) ? logs.filter_map { |l| log_key(l) } : [],
+        redaction: redaction.is_a?(Array) ? redaction : nil
+      }
     rescue JSON::ParserError
-      # Counts were accepted; an unreadable answer only loses the ask.
-      []
+      # Counts were accepted; an unreadable answer only loses the asks.
+      none
+    end
+
+    def log_key(ask)
+      key = ask.is_a?(Hash) ? ask['trace'] : nil
+      key.is_a?(String) && !key.empty? && key.bytesize <= 256 ? key : nil
+    end
+
+    # Phase 3: the lines this process holds for each requested trace,
+    # redacted with the exemplars' strict egress plus the learned rules,
+    # POSTed with the secret key. A key with no lines here sends nothing:
+    # another process (a Puma worker, a Sidekiq process) may hold them, and
+    # ingest does not let a server key's empty answer settle a request.
+    def deliver_logs(keys, deadline)
+      policy = @policy
+      slices = keys.filter_map do |key|
+        lines = Logs.lookup(key, MAX_SLICE_LINES)
+        next if lines.empty?
+
+        { trace: key, lines: bound_slice(lines.map { |line| egress_line(line, policy) }) }
+      end
+      slice_bodies(slices).each do |body|
+        response = request(:post, @logs_uri, body, flush_headers, deadline)
+        next if response.nil? || (200..299).cover?(response.code.to_i)
+
+        code = response.code.to_i
+        Devbench.warn_once(:"logs_http_#{code}", "Dev Bench refused log lines: HTTP #{code}: #{explain(code, response)}")
+      end
+      nil
+    rescue StandardError, SystemStackError
+      nil
+    end
+
+    # A held line is "[<trace>] <SEVERITY> <message>" (Logs). The bracketed
+    # trace is our own framing, kept as is; the rest is redacted exactly as
+    # the sidecar redacts a line's body.
+    OWN_TRACE = %r{\A\[(v1/[A-Za-z0-9_-]{1,64}/[A-Za-z0-9_-]{1,64}/\d{1,3})\] }
+
+    def egress_line(line, policy)
+      own = OWN_TRACE.match(line)
+      out = if own.nil?
+              Scrub.egress(line, policy, @service)
+            else
+              rest = line[own.end(0)..]
+              redacted = Scrub.egress(rest, policy, @service)
+              # A message that already carries the trace (Rails embeds its
+              # log tags in a multi-line error) comes back prefixed with it.
+              redacted.start_with?("[#{own[1]}] ") ? redacted : "[#{own[1]}] #{redacted}"
+            end
+      out.bytesize > Logs::MAX_LINE_BYTES ? out.byteslice(0, Logs::MAX_LINE_BYTES).scrub('') : out
+    end
+
+    # The most recent lines that fit the store's per-slice byte bound.
+    def bound_slice(lines)
+      total = 0
+      kept = []
+      lines.reverse_each do |line|
+        total += line.bytesize
+        break if total > MAX_SLICE_BYTES
+
+        kept << line
+      end
+      kept.reverse
+    end
+
+    # At most MAX_SLICES_PER_POST slices and MAX_BODY_BYTES per request.
+    def slice_bodies(slices)
+      out = []
+      current = []
+      size = 0
+      budget = MAX_BODY_BYTES - JSON.generate({ slices: [] }).bytesize
+      slices.each do |slice|
+        bytes = JSON.generate(slice).bytesize + 1
+        if !current.empty? && (current.length >= MAX_SLICES_PER_POST || size + bytes > budget)
+          out << JSON.generate({ slices: current })
+          current = []
+          size = 0
+        end
+        current << slice
+        size += bytes
+      end
+      out << JSON.generate({ slices: current }) unless current.empty?
+      out
     end
 
     # Phase 2: the sidecar's bundle shape, PUT to the presigned URL with no
@@ -395,8 +544,8 @@ module Devbench
 
       bundle = {
         v: 1, fp: fp, kind: detail.kind,
-        template: Scrub.template_text(detail.text), service: @service,
-        exemplars: detail.exemplar.empty? ? [] : [Scrub.egress(detail.exemplar)]
+        template: Scrub.template_text(detail.text, @policy, fp), service: @service,
+        exemplars: detail.exemplar.empty? ? [] : [Scrub.egress(detail.exemplar, @policy, @service)]
       }
       bundle[:frames] = detail.frames unless detail.frames.empty?
       response = request(:put, URI(url), JSON.generate(bundle), { 'content-type' => 'application/json' }, deadline)

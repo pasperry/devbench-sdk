@@ -26,4 +26,4 @@ export { CounterTable, type Count } from './counters.js';
 export { Transport, type FlushRequest, type FlushResponse } from './transport.js';
 
 /** SDK version. Bumped on every change to any SDK; all three SDKs share it. */
-export const VERSION = '0.5.0';
+export const VERSION = '0.6.0';

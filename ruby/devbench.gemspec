@@ -12,7 +12,9 @@ Gem::Specification.new do |spec|
     Sidekiq jobs, and failures the application handled, with who was
     affected, to Dev Bench. Fingerprints and counts in-process and sends one
     small request a minute; detail is uploaded only when Dev Bench asks for
-    it, scrubbed first. Set DEVBENCH_DSN and it hooks itself into Rails.
+    it, scrubbed first. Keeps recent server log lines per user action for
+    triage, renders the browser sensor's tag, and hooks itself into Rails:
+    bundle add devbench, bin/rails generate devbench, set DEVBENCH_DSN.
 
     Adds no dependencies beyond the standard library, never alters a response
     body, and never raises: a diagnostics gem that can fail a request is worse

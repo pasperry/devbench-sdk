@@ -4,23 +4,31 @@ require 'uri'
 
 module Devbench
   # Where reports go, parsed from DEVBENCH_DSN (docs/SERVER_SDK_SPEC.md, "Dev
-  # Bench naming and configuration"):
+  # Bench naming and configuration"; DECISIONS #161):
   #
-  #   https://<ingest key>@<host>[:port]
+  #   https://<public>:<secret>@<host>[:port]    from `adt dsn create`
+  #   https://<key>@<host>[:port]                0.5 and earlier: one key
   #
-  # scheme://host[:port] is the ingest base and the userinfo is the key. A
-  # path or query, if present, is ignored: the key alone identifies tenant,
-  # environment and source.
+  # scheme://host[:port] is the ingest base. The secret (a server key) is
+  # what this process authenticates with; the public part (a browser key) is
+  # only ever handed to the page, via #browser_dsn. A single-key DSN keeps
+  # working with its one key and has no browser part — that key is a server
+  # secret and must never reach a page. A path or query, if present, is
+  # ignored: the keys alone identify tenant, environment and source.
   class DSN
     class Invalid < StandardError; end
 
     LOOPBACK = /\A(?:localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])\z|\.localhost\z/i
+    SHAPE = 'https://<public>:<secret>@<host>'
 
-    attr_reader :base, :key
+    attr_reader :base, :key, :public_key
 
-    def initialize(base, key)
+    # key: what the server sends as X-ADT-Key (the secret, or a 0.5 DSN's
+    # single key). public_key: the browser key, or nil.
+    def initialize(base, key, public_key = nil)
       @base = base.freeze
       @key = key.freeze
+      @public_key = public_key&.freeze
       freeze
     end
 
@@ -28,8 +36,26 @@ module Devbench
       "#{@base}/v1/flush"
     end
 
-    # The DSN without its key, for messages and logs. The key is a secret
-    # on a server: it must never be printed.
+    # The self-test endpoint: validates the key, stores nothing.
+    def check_url
+      "#{@base}/v1/check"
+    end
+
+    def logs_url
+      "#{@base}/v1/logs"
+    end
+
+    # The DSN a browser may hold: https://<public>@host. Nil when there is
+    # no public part.
+    def browser_dsn
+      return nil if @public_key.nil?
+
+      scheme, rest = @base.split('://', 2)
+      "#{scheme}://#{URI.encode_www_form_component(@public_key)}@#{rest}"
+    end
+
+    # The DSN without its keys, for messages and logs. The secret must never
+    # be printed.
     def to_s
       @base
     end
@@ -37,7 +63,7 @@ module Devbench
     alias inspect to_s
 
     # Raises DSN::Invalid with a message that says what to fix. Never echoes
-    # the key back.
+    # either key back.
     def self.parse(raw)
       text = raw.to_s.strip
       raise Invalid, 'is empty' if text.empty?
@@ -45,28 +71,32 @@ module Devbench
       uri = begin
         URI.parse(text)
       rescue URI::Error
-        raise Invalid, 'is not a URL (expected https://<key>@<host>)'
+        raise Invalid, "is not a URL (expected #{SHAPE})"
       end
 
       scheme = uri.scheme.to_s.downcase
-      raise Invalid, 'must start with https:// (expected https://<key>@<host>)' unless %w[http https].include?(scheme)
+      raise Invalid, "must start with https:// (expected #{SHAPE})" unless %w[http https].include?(scheme)
 
       host = uri.host.to_s
-      raise Invalid, 'has no host (expected https://<key>@<host>)' if host.empty?
+      raise Invalid, "has no host (expected #{SHAPE})" if host.empty?
 
-      key = URI.decode_www_form_component(uri.user.to_s)
-      raise Invalid, 'has no key (expected https://<key>@<host>)' if key.strip.empty?
+      user = URI.decode_www_form_component(uri.user.to_s).strip
+      secret = URI.decode_www_form_component(uri.password.to_s).strip
+      raise Invalid, "has no key (expected #{SHAPE})" if user.empty? && secret.empty?
 
-      # The key is a real secret on a server. Over plain http it would cross
-      # the network readable by anything on the path, so http is accepted
-      # only for a loopback ingest (local development and tests).
+      # The secret is a real secret on a server. Over plain http it would
+      # cross the network readable by anything on the path, so http is
+      # accepted only for a loopback ingest (local development and tests).
       if scheme == 'http' && !LOOPBACK.match?(host)
         raise Invalid, "uses http:// for #{host}: the key would cross the network in plaintext; use https://"
       end
 
       port = uri.port && uri.port != uri.default_port ? ":#{uri.port}" : ''
       host = "[#{host}]" if host.include?(':') && !host.start_with?('[')
-      new("#{scheme}://#{host}#{port}", key.strip)
+      base = "#{scheme}://#{host}#{port}"
+      return new(base, user) if secret.empty?
+
+      new(base, secret, user.empty? ? nil : user)
     end
   end
 
@@ -77,7 +107,8 @@ module Devbench
   #                      sidecar's socket, as before 0.5.
   #   DEVBENCH_SERVICE   this app's name. Default: the Rails application's
   #                      module, underscored (AcmeShop -> acme_shop);
-  #                      else "app".
+  #                      else "app"; with "-sidekiq" appended in a
+  #                      Sidekiq process.
   #   DEVBENCH_RELEASE   the deployed version. Default: GIT_SHA,
   #                      SOURCE_VERSION, RENDER_GIT_COMMIT, else "".
   #   DEVBENCH_ENABLED   "false" turns everything off.
@@ -106,8 +137,16 @@ module Devbench
 
     # The service name sent with every flush and folded into every
     # fingerprint. Resolved when reporting starts, after Rails has booted.
+    #
+    # A Sidekiq process (Sidekiq.server?) defaults to "<app>-sidekiq", so a
+    # typical app's web and job processes are told apart with no
+    # DEVBENCH_SERVICE at all. An explicit service always wins.
     def resolved_service
-      presence(@service) || rails_service || 'app'
+      explicit = presence(@service)
+      return explicit if explicit
+
+      base = rails_service || 'app'
+      sidekiq_server? ? "#{base}-sidekiq" : base
     end
 
     def resolved_release
@@ -115,6 +154,12 @@ module Devbench
     end
 
     private
+
+    def sidekiq_server?
+      defined?(::Sidekiq) && ::Sidekiq.respond_to?(:server?) && ::Sidekiq.server? ? true : false
+    rescue StandardError, SystemStackError
+      false
+    end
 
     def presence(value)
       text = value.to_s.strip

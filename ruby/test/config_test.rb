@@ -56,6 +56,83 @@ class DSNTest < Minitest::Test
     refute_includes dsn.to_s, KEY
     refute_includes dsn.inspect, KEY
   end
+
+  # DECISIONS #161: https://<public>:<secret>@host, as `adt dsn create`
+  # prints it. The server authenticates with the secret; the page gets only
+  # the public part.
+  PUBLIC = 'adt_client_pub987'
+  SECRET = 'adt_server_sec654'
+
+  def test_a_pair_dsn_authenticates_with_the_secret_and_offers_the_public_part
+    dsn = Devbench::DSN.parse("https://#{PUBLIC}:#{SECRET}@adt-ingest.onrender.com")
+    assert_equal 'https://adt-ingest.onrender.com', dsn.base
+    assert_equal SECRET, dsn.key
+    assert_equal PUBLIC, dsn.public_key
+    assert_equal "https://#{PUBLIC}@adt-ingest.onrender.com", dsn.browser_dsn
+    assert_equal 'https://adt-ingest.onrender.com/v1/logs', dsn.logs_url
+  end
+
+  def test_a_pair_dsn_keeps_a_port_in_the_browser_dsn
+    dsn = Devbench::DSN.parse("http://#{PUBLIC}:#{SECRET}@127.0.0.1:8080")
+    assert_equal "http://#{PUBLIC}@127.0.0.1:8080", dsn.browser_dsn
+  end
+
+  # A 0.5 DSN's one key is a server key: it keeps working for reporting and
+  # is never offered to a page.
+  def test_a_single_key_dsn_has_no_browser_part
+    dsn = Devbench::DSN.parse("https://#{KEY}@h.example.com")
+    assert_equal KEY, dsn.key
+    assert_nil dsn.public_key
+    assert_nil dsn.browser_dsn
+  end
+
+  def test_a_secret_with_no_public_part_has_no_browser_part
+    dsn = Devbench::DSN.parse("https://:#{SECRET}@h.example.com")
+    assert_equal SECRET, dsn.key
+    assert_nil dsn.browser_dsn
+  end
+
+  def test_the_secret_is_never_printed_or_echoed
+    dsn = Devbench::DSN.parse("https://#{PUBLIC}:#{SECRET}@h.example.com")
+    [dsn.to_s, dsn.inspect, dsn.browser_dsn].each { |text| refute_includes text, SECRET }
+
+    error = assert_raises(Devbench::DSN::Invalid) { Devbench::DSN.parse("http://#{PUBLIC}:#{SECRET}@ingest.example.com") }
+    refute_includes error.message, SECRET
+    refute_includes error.message, PUBLIC
+  end
+end
+
+class BrowserDSNTest < Minitest::Test
+  def teardown
+    Devbench.reset!
+  end
+
+  def with_dsn(dsn, enabled: true)
+    Devbench.reset!
+    Devbench.configure do |c|
+      c.dsn = dsn
+      c.enabled = enabled
+    end
+    Devbench.browser_dsn
+  end
+
+  def test_the_browser_dsn_is_the_public_part_only
+    got = with_dsn('https://pub1:sec1@ingest.example.com')
+    assert_equal 'https://pub1@ingest.example.com', got
+  end
+
+  def test_none_without_a_public_part_a_dsn_or_when_disabled
+    assert_nil with_dsn('https://onlykey@ingest.example.com')
+    assert_nil with_dsn(nil)
+    assert_nil with_dsn('not a dsn')
+    assert_nil with_dsn('https://pub1:sec1@ingest.example.com', enabled: false)
+  end
+
+  def test_follows_a_reconfigured_dsn
+    assert_equal 'https://a@x.example.com', with_dsn('https://a:s@x.example.com')
+    Devbench.configure { |c| c.dsn = 'https://b:s@y.example.com' }
+    assert_equal 'https://b@y.example.com', Devbench.browser_dsn
+  end
 end
 
 class ConfigurationTest < Minitest::Test
@@ -96,7 +173,7 @@ end
 # choice is made once, from the environment the process started with.
 class TransportSelectionTest < Minitest::Test
   LIB = File.expand_path('../lib', __dir__)
-  CLEAN = { 'DEVBENCH_DSN' => nil, 'ADT_DSN' => nil, 'DEVBENCH_ENABLED' => nil }.freeze
+  CLEAN = { 'DEVBENCH_DSN' => nil, 'ADT_DSN' => nil, 'DEVBENCH_ENABLED' => nil, 'DEVBENCH_SERVICE' => nil }.freeze
 
   def ruby(script, env = {})
     out, err, status = Open3.capture3(CLEAN.merge(env), RbConfig.ruby, '-w', '-I', LIB, '-e', script)
@@ -146,6 +223,42 @@ class TransportSelectionTest < Minitest::Test
     out, err = ruby(script)
     assert_equal 'Devbench::SidecarTransport Devbench::NullTransport nope', out
     assert_equal 1, err.lines.grep(/\[devbench\] DEVBENCH_DSN is not a URL|\[devbench\] DEVBENCH_DSN must/).size, err
+  end
+
+  # A Sidekiq process (Sidekiq.server?: the CLI is loaded) is told apart
+  # from the web process with no DEVBENCH_SERVICE. Each in a fresh process,
+  # with real Sidekiq (and real Rails for the app name).
+  def sidekiq_service(env = {}, rails: false)
+    gems = rails ? %w[rails sidekiq] : %w[sidekiq]
+    available = gems.all? { |g| Gem::Specification.find_all_by_name(g).any? }
+    unless available
+      flunk "#{gems.join(' and ')} required here" if ENV['ADT_REQUIRE_SIDEKIQ']
+      skip "#{gems.join(' and ')} not installed"
+    end
+    app = rails ? 'require "rails"; module AcmeShop; class Application < Rails::Application; end; end; ' : ''
+    out, = ruby("#{app}require \"sidekiq\"; require \"sidekiq/cli\"; require \"devbench\"; " \
+                'print Devbench.config.resolved_service', env)
+    out
+  end
+
+  def test_a_sidekiq_process_defaults_to_app_sidekiq
+    assert_equal 'app-sidekiq', sidekiq_service
+  end
+
+  def test_a_rails_sidekiq_process_defaults_to_the_app_name_with_sidekiq
+    assert_equal 'acme_shop-sidekiq', sidekiq_service(rails: true)
+  end
+
+  def test_an_explicit_service_wins_in_a_sidekiq_process
+    assert_equal 'billing-jobs', sidekiq_service({ 'DEVBENCH_SERVICE' => 'billing-jobs' }, rails: true)
+  end
+
+  # Sidekiq loaded as a client (the web process) is not a Sidekiq process.
+  def test_sidekiq_as_a_client_keeps_the_app_name
+    skip 'sidekiq not installed' unless Gem::Specification.find_all_by_name('sidekiq').any?
+
+    out, = ruby('require "sidekiq"; require "devbench"; print Devbench.config.resolved_service')
+    assert_equal 'app', out
   end
 
   def test_a_configure_block_that_raises_does_not_raise_into_the_app

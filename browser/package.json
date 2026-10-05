@@ -1,6 +1,6 @@
 {
   "name": "devbench",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Dev Bench browser sensor: errors, failed and slow requests, slow pages, counted per problem. One script tag or one call.",
   "license": "MIT",
   "repository": "github:pasperry/devbench-sdk",

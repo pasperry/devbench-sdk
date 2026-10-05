@@ -102,6 +102,10 @@ type directClient struct {
 	flushMu  sync.Mutex // one flush cycle at a time
 	dropped  atomic.Int64
 	launched atomic.Bool
+
+	// policy is the learned redaction rule set from the latest flush
+	// response that carried one; nil until then.
+	policy atomic.Pointer[egressPolicy]
 }
 
 // item is a report, or a barrier that Flush waits on to know every report
@@ -393,6 +397,17 @@ type evidenceRequest struct {
 
 type flushReply struct {
 	NeedEvidence []evidenceRequest `json:"need_evidence"`
+	// NeedLogs asks for the lines held for these trace keys (server keys
+	// only, DECISIONS #161).
+	NeedLogs []logRequest `json:"need_logs"`
+	// Redaction is the full current set of learned rules. A pointer so an
+	// absent field (a failed lookup on ingest's side) leaves the rules in
+	// force, while an explicit [] withdraws them all — as the sidecar does.
+	Redaction *[]egressRule `json:"redaction"`
+}
+
+type logRequest struct {
+	Trace string `json:"trace"`
 }
 
 // evidenceBundle is the sidecar's TemplateBundle, so triage needs no change.
@@ -426,8 +441,15 @@ func (d *directClient) flushNow(ctx context.Context) error {
 	return d.flushCycle(ctx)
 }
 
-// flushCycle sends the current window and answers evidence requests. Empty
-// windows send nothing (ingest refuses an empty flush from a server key).
+// flushCycle sends the current window and answers evidence and log
+// requests.
+//
+// An empty window sends nothing — unless this process holds traced log
+// lines, when it sends one empty flush ("counts": []) as a poll
+// (SERVER_SDK_SPEC "Poll while holding lines"): need_logs only rides a
+// flush response, so without it a quiet process would never hear that
+// triage wants lines only it has. Ingest accepts an empty flush from a
+// server key for exactly this.
 func (d *directClient) flushCycle(ctx context.Context) error {
 	d.flushMu.Lock()
 	defer d.flushMu.Unlock()
@@ -438,7 +460,10 @@ func (d *directClient) flushCycle(ctx context.Context) error {
 	d.mu.Unlock()
 
 	if len(win.entries) == 0 {
-		return nil
+		if !captured.holding(logNow()) {
+			return nil
+		}
+		return d.flushBatches(ctx, win, [][]flushCount{{}}) // the poll
 	}
 
 	counts := make([]flushCount, 0, len(win.entries))
@@ -453,9 +478,18 @@ func (d *directClient) flushCycle(ctx context.Context) error {
 	envelope := flushBody{
 		V: 1, Source: "server", Service: d.cfg.service, Release: d.cfg.release, SensorID: sensorID,
 	}
-	batches := splitCounts(envelope, counts)
+	return d.flushBatches(ctx, win, splitCounts(envelope, counts))
+}
 
+// flushBatches posts each batch of a window (an empty batch is the poll),
+// then answers what the responses asked for. Caller holds flushMu.
+func (d *directClient) flushBatches(ctx context.Context, win *window, batches [][]flushCount) error {
+	envelope := flushBody{
+		V: 1, Source: "server", Service: d.cfg.service, Release: d.cfg.release, SensorID: sensorID,
+	}
 	dropped := int(d.dropped.Swap(0))
+	var askedLogs []string
+	asked := map[string]bool{}
 	for i, batch := range batches {
 		body := envelope
 		body.Counts = batch
@@ -471,11 +505,24 @@ func (d *directClient) flushCycle(ctx context.Context) error {
 			for _, rest := range batches[i:] {
 				stats.failed.Add(sumN(rest))
 			}
+			d.answerLogs(ctx, askedLogs)
 			return err
 		}
 		stats.sent.Add(sumN(batch))
+		// Rules before answers, as the sidecar does: a rule arriving with a
+		// request for the shape it governs must apply to that request.
+		if reply.Redaction != nil {
+			d.policy.Store(compilePolicy(*reply.Redaction))
+		}
+		for _, r := range reply.NeedLogs {
+			if r.Trace != "" && !asked[r.Trace] {
+				asked[r.Trace] = true
+				askedLogs = append(askedLogs, r.Trace)
+			}
+		}
 		d.answerEvidence(ctx, reply.NeedEvidence)
 	}
+	d.answerLogs(ctx, askedLogs)
 	return nil
 }
 
@@ -567,18 +614,34 @@ func (d *directClient) answerEvidence(ctx context.Context, reqs []evidenceReques
 			// Aged out. The claim expires and ingest asks again later.
 			continue
 		}
-		_ = uploadEvidence(ctx, d.client, r.URL, buildBundle(r.FP, d.cfg.service, det))
+		_ = uploadEvidence(ctx, d.client, r.URL, buildBundleWith(d.policy.Load(), r.FP, d.cfg.service, det))
 	}
 }
 
 // buildBundle redacts a detail for egress exactly as the sidecar does in
 // strict mode. Identity is never part of a detail, so never part of this.
 func buildBundle(fp, service string, det *detail) evidenceBundle {
+	return buildBundleWith(nil, fp, service, det)
+}
+
+// buildBundleWith is buildBundle under learned rules p, as the sidecar's
+// answerEvidenceRequests applies them: the template gets the rule stored
+// under the reported fingerprint ('none' sends no text), the exemplar gets
+// the line rules.
+func buildBundleWith(p *egressPolicy, fp, service string, det *detail) evidenceBundle {
+	template := ""
+	rule := ""
+	if p != nil {
+		rule = p.shapes[fp]
+	}
+	if text, ok := p.redactBody(det.text, rule); ok {
+		template = scrubText(text)
+	}
 	return evidenceBundle{
 		V: 1, FP: fp, Kind: det.kind,
-		Template:  egressTemplate(det.text),
+		Template:  template,
 		Service:   service,
-		Exemplars: []string{egressLine(det.exemplar)},
+		Exemplars: []string{egressLineWith(p, service, det.exemplar)},
 		Frames:    det.frames,
 	}
 }
@@ -735,8 +798,9 @@ func closeDirect(ctx context.Context) error {
 //	    log.Fatal(err) // no DSN, the key was rejected, or ingest is unreachable
 //	}
 //
-// It appears in Dev Bench as an error "devbench.TestException" from this
-// service. It does not touch the counts the background flusher holds.
+// It asks ingest whether this DSN's key is valid (POST /v1/check) and
+// records nothing: it used to send a synthetic exception, which became a real
+// issue on a new customer's punch list.
 func Test(ctx context.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -758,35 +822,21 @@ func Test(ctx context.Context) (err error) {
 		return errorf("no DSN configured: set %s or Options.DSN (without one, reports go to the local sidecar)", EnvDSN)
 	}
 
-	m := message{
-		V: 1, Kind: "exception", Context: "explicit", Handled: &handledTrue,
-		Error:   "devbench.TestException",
-		Message: "Dev Bench self-test from service " + c.service,
-		Symbol:  "devbench.Test",
-	}
-	sig, text := signalFor(m, c.service)
-	fp, _, err := computeFingerprint(sig)
-	if err != nil {
-		return errorf("fingerprint self-test: %v", err)
-	}
-	now := time.Now().Unix()
-
 	d := newDirectClient(c)
-	reply, err := d.post(ctx, flushBody{
-		V: 1, Source: "server", Service: c.service, Release: c.release, SensorID: sensorID,
-		Counts: []flushCount{{FP: fp, N: 1, First: now, Last: now, Kind: "error"}},
+	status, _, err := doWithRetry(ctx, d.client, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/v1/check", strings.NewReader("{}"))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("content-type", "application/json")
+		req.Header.Set("X-ADT-Key", c.key)
+		return req, nil
 	})
 	if err != nil {
 		return err
 	}
-	det := &detail{kind: "error", text: text, exemplar: exemplarLine(m)}
-	for _, r := range reply.NeedEvidence {
-		if r.FP != fp || r.URL == "" {
-			continue
-		}
-		if err := uploadEvidence(ctx, d.client, r.URL, buildBundle(fp, c.service, det)); err != nil {
-			return errorf("counts accepted, but the evidence upload failed: %v", err)
-		}
+	if status < 200 || status >= 300 {
+		return statusError(status)
 	}
 	return nil
 }

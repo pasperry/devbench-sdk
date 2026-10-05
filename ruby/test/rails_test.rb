@@ -63,6 +63,25 @@ class RailsHooksTest < Minitest::Test
     assert defined?(ADT::Railtie), 'ADT::Railtie must load when Rails is present'
   end
 
+  # No DSN, no browser DSN: the helper renders nothing at all.
+  def test_the_script_tag_renders_nothing_without_a_dsn
+    status, _, body = request('GET', '/page')
+    html = +''
+    body.each { |part| html << part }
+    assert_equal 200, status
+    assert_equal '<head></head>', html
+  end
+
+  # Log capture is direct mode's; with the sidecar reading the log stream,
+  # the gem keeps nothing and joins nothing.
+  def test_sidecar_mode_does_not_capture_logs
+    refute Devbench::Logs.active?
+    if Rails.logger.respond_to?(:broadcasts)
+      assert_equal 0, Rails.logger.broadcasts.count { |l| l.is_a?(Devbench::Logs::CaptureLogger) }
+    end
+    refute Rails.logger.singleton_class.include?(Devbench::Logs::Tee)
+  end
+
   # The test app inserts ADT::Middleware itself, as every pre-0.5 install
   # does; the Railtie's own insert must then not add a second one.
   def test_an_app_that_inserted_the_middleware_has_it_once
@@ -407,12 +426,12 @@ class RailtieMiddlewareTest < Minitest::Test
     ingest&.close
   end
 
-  def test_rake_devbench_test_sends_one_exception
+  def test_rake_devbench_test_checks_the_dsn_and_records_nothing
     ok, out, flushes = rake_test(200)
     assert ok, out
-    assert_match(/HTTP 200: accepted/, out)
-    assert_equal 1, flushes.length
-    assert_equal ['web', 'error'], [flushes.first.json['service'], flushes.first.json['counts'].first['kind']]
+    assert_match(/HTTP 200: accepted — tenant "acme"/, out)
+    assert_match(/service "web"/, out)
+    assert_empty flushes, 'the self-test must not create a fingerprint (it would become an issue)'
   end
 
   def test_rake_devbench_test_fails_on_a_rejected_key

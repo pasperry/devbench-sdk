@@ -62,6 +62,19 @@ end
 class DirectFlushTest < Minitest::Test
   include DirectSetup
 
+  # DECISIONS #161: a pair DSN authenticates with its secret; the public
+  # part is for the page and is never sent by the server.
+  def test_a_pair_dsn_flushes_with_the_secret_key
+    configure(@ingest.pair_dsn('adt_client_pub', 'adt_server_sec'))
+    ADT.capture_exception(raised(ArgumentError.new('boom')), symbol: 'Billing#run')
+
+    assert Devbench.flush!
+    flush = @ingest.flushes.first
+    refute_nil flush, 'no flush arrived'
+    assert_equal 'adt_server_sec', flush.headers['x-adt-key']
+    refute_includes flush.headers.values.join(' '), 'adt_client_pub'
+  end
+
   def test_phase_one_body_carries_counts_and_nothing_else
     error = raised(ArgumentError.new('boom for pat@example.com'))
     ADT.capture_exception(error, symbol: 'Billing#run')
@@ -326,17 +339,15 @@ class DirectSelfTest < Minitest::Test
   end
 
   def test_a_working_dsn
-    @ingest.ask_evidence = true
     ok, out = run_test!
     assert ok, out
-    assert_match(/HTTP 200: accepted/, out)
-    assert_match(/evidence uploaded \(HTTP 200\)/, out)
+    assert_match(/HTTP 200: accepted — tenant "acme", environment "test"/, out)
     refute_includes out, 'adt_server_testkey', 'the key must never be printed'
 
-    count = @ingest.flushes.first.json['counts'].first
-    assert_equal 'error', count['kind']
-    bundle = @ingest.evidence.first.json
-    assert_match(/\ADevbench::TestException at devbench:test\z/, bundle['template'])
+    checks = @ingest.requests.select { |r| r.path == '/v1/check' }
+    assert_equal 1, checks.size, 'one check request'
+    assert_empty @ingest.flushes, 'a self-test must create nothing: no flush, so no fingerprint or issue'
+    assert_empty @ingest.evidence
   end
 
   def test_a_rejected_key

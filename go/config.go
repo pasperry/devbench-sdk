@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"runtime/debug"
@@ -18,7 +19,12 @@ import (
 //
 // One DSN per environment carries everything the SDK needs to send:
 //
-//	DEVBENCH_DSN=https://<ingest key>@adt-ingest.onrender.com
+//	DEVBENCH_DSN=https://<public key>:<secret key>@adt-ingest.onrender.com
+//
+// The public part is the environment's browser (`client`) key; the secret
+// part is its `server` key, and is what this SDK authenticates with
+// (DECISIONS #161). A DSN with a single key (`https://<key>@host`, the 0.5
+// form) still works: that key is sent as before.
 //
 // With a DSN the SDK sends directly to ingest; without one it writes to the
 // local sidecar's socket as it always has. Exactly one of the two, decided
@@ -44,7 +50,8 @@ var releaseEnvFallbacks = []string{"GIT_SHA", "SOURCE_VERSION", "RENDER_GIT_COMM
 // Options configures the SDK. Every field is optional: an empty field falls
 // back to its environment variable, then to a default.
 type Options struct {
-	// DSN is https://<ingest key>@<ingest host>. Empty means DEVBENCH_DSN,
+	// DSN is https://<public>:<secret>@<ingest host> (or the 0.5 form,
+	// https://<key>@<ingest host>). Empty means DEVBENCH_DSN,
 	// then ADT_DSN; with none of them, reports go to the local sidecar.
 	DSN string
 	// Service names this application. Default: DEVBENCH_SERVICE, then the
@@ -81,7 +88,7 @@ func (m mode) String() string {
 type config struct {
 	mode    mode
 	base    string // scheme://host[:port] of ingest, direct mode only
-	key     string // the ingest key from the DSN's userinfo
+	key     string // sent as X-ADT-Key: the DSN's secret, else its only key
 	service string
 	release string
 	// problem says why reporting is off, for Test to return.
@@ -183,9 +190,14 @@ func resolve(opts Options) *config {
 	return c
 }
 
-// parseDSN splits https://<key>@host[:port] into the ingest base URL and the
-// key. A path or query is ignored. The error never quotes the DSN: it holds
-// a credential, and this message goes to the application's log.
+// parseDSN splits a DSN into the ingest base URL and the key to send:
+//
+//	https://<public>:<secret>@host[:port]  -> <secret>  (DECISIONS #161)
+//	https://<key>@host[:port]              -> <key>     (the 0.5 form)
+//
+// The public part of a pair is the browser's key; a server never sends it.
+// A path or query is ignored. The error never quotes the DSN or either key:
+// they are credentials, and this message goes to the application's log.
 func parseDSN(dsn string) (base, key string, err error) {
 	u, err := url.Parse(strings.TrimSpace(dsn))
 	if err != nil {
@@ -197,10 +209,35 @@ func parseDSN(dsn string) (base, key string, err error) {
 	if u.Host == "" || u.Hostname() == "" {
 		return "", "", errors.New("no host")
 	}
+	// The key is a server secret. Over plain http it crosses the network
+	// readable by anything on the path, so http is for a loopback ingest
+	// only (local development and tests) — as the Ruby gem enforces.
+	if u.Scheme == "http" && !isLoopback(u.Hostname()) {
+		return "", "", errors.New("http:// is accepted only for a loopback ingest (the key would cross the network in plaintext); use https://")
+	}
 	if u.User == nil || u.User.Username() == "" {
 		return "", "", errors.New("no ingest key before the @")
 	}
-	return u.Scheme + "://" + u.Host, u.User.Username(), nil
+	base = u.Scheme + "://" + u.Host
+	if pass, hasPass := u.User.Password(); hasPass {
+		if strings.TrimSpace(pass) == "" {
+			// "https://pub:@host" is a pasting mistake. Falling back to the
+			// public key would send server reports as a browser.
+			return "", "", errors.New("the server key after the ':' is empty")
+		}
+		return base, pass, nil
+	}
+	return base, u.User.Username(), nil
+}
+
+// isLoopback: localhost, *.localhost, or a loopback IP (127.0.0.0/8, ::1).
+func isLoopback(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(host, "."))
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 // defaultService is the last element of the main module's path, skipping a

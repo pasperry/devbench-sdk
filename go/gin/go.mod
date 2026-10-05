@@ -6,7 +6,7 @@ go 1.22
 
 require (
 	github.com/gin-gonic/gin v1.10.1
-	github.com/pasperry/devbench-sdk/go v0.5.0
+	github.com/pasperry/devbench-sdk/go v0.6.0
 )
 
 require (
