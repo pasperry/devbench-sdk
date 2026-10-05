@@ -86,6 +86,20 @@ install, replace that block with the script tag above (a DSN is
 `https://<ingestKey>@<host of your endpoint>`); remove the old init code in
 the same change, or `init` keeps the first sensor and warns.
 
+## Content-Security-Policy
+
+If your app sets a CSP, it needs two entries, or the sensor is blocked
+(silently, under `report-only`, until the day enforcement is switched on):
+
+| Directive | Add | Why |
+|---|---|---|
+| `script-src` | `https://unpkg.com` | the script tag's source (skip if you serve `devbench.min.js` from your own assets) |
+| `connect-src` | your DSN's host, e.g. `https://adt-ingest.onrender.com` | where reports are sent |
+
+Evidence uploads go to presigned object-storage URLs on a separate host; add
+that host to `connect-src` as well when your Dev Bench account names one
+(today: `https://*.storage.supabase.co`).
+
 ## What is captured automatically
 
 **Errors.** Uncaught errors, unhandled rejections, `console.error`,
