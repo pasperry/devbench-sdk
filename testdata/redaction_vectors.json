@@ -1,0 +1,151 @@
+{
+  "_comment": [
+    "Shared redaction vectors.",
+    "",
+    "`shared` must hold for every implementation that redacts free text: the",
+    "browser SDK and the sidecar. A divergence here means one side leaks what",
+    "the other removes, which is the kind of gap nobody notices until it is in",
+    "a GitHub issue.",
+    "",
+    "`server_only` covers credentials that appear in server logs and never in",
+    "a browser. The browser bundle deliberately does not carry these patterns:",
+    "it has a size budget, and a page has no Authorization header to log.",
+    "",
+    "`must_survive` is as important as the rest. A scrubber that eats the",
+    "diagnostic content is useless, and the line that explains a swallowed",
+    "failure is exactly what triage needs.",
+    "",
+    "`prose` covers the heuristic that masks personal data with no shape to",
+    "match. It is checked by the sidecar only: the browser never sees a server",
+    "log line, and this heuristic is wrong in both directions by design, so it",
+    "is corrected afterwards by learned rules rather than trusted absolutely."
+  ],
+  "shared": [
+    {
+      "name": "email in free text",
+      "in": "Completed update for alice@example.com",
+      "out": "Completed update for <redacted:email>"
+    },
+    {
+      "name": "email inside SQL literal",
+      "in": "WHERE \"email\" = 'alice@example.com'",
+      "out": "WHERE \"email\" = '<redacted:email>'"
+    },
+    {
+      "name": "ssn is labelled as an ssn, not swallowed by the phone rule",
+      "in": "ssn 123-45-6789 on file",
+      "out": "ssn <redacted:ssn> on file"
+    },
+    {
+      "name": "card number",
+      "in": "charged 4111 1111 1111 1111 ok",
+      "out": "charged <redacted:card> ok"
+    },
+    {
+      "name": "phone",
+      "in": "called +1 (555) 123-4567 twice",
+      "out": "called <redacted:phone> twice"
+    }
+  ],
+  "server_only": [
+    {
+      "name": "jwt survives templating entirely, so it must be matched here",
+      "in": "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.abcdefgh",
+      "out": "Authorization: <redacted:authorization>"
+    },
+    {
+      "name": "bare jwt without a header",
+      "in": "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.abcdefgh expired",
+      "out": "token <redacted:jwt> expired"
+    },
+    {
+      "name": "connection string credentials run before the email rule",
+      "in": "connecting to postgres://admin:s3cretpw@db.internal:5432/app",
+      "out": "connecting to postgres://<redacted:credentials>@db.internal:5432/app"
+    },
+    {
+      "name": "named secret assignment",
+      "in": "api_key=sk_live_abcdef123456 loaded",
+      "out": "api_key=<redacted:secret> loaded"
+    },
+    {
+      "name": "password in a quoted assignment",
+      "in": "password: \"hunter2\"",
+      "out": "password: <redacted:secret>"
+    },
+    {
+      "name": "aws access key id",
+      "in": "using AKIAIOSFODNN7EXAMPLE for s3",
+      "out": "using <redacted:aws-key> for s3"
+    },
+    {
+      "name": "client ip from a rails request line",
+      "in": "Started GET \"/api/customers\" for 203.0.113.42",
+      "out": "Started GET \"/api/customers\" for <redacted:ip>"
+    }
+  ],
+  "must_survive": [
+    {
+      "name": "the line that explains a swallowed failure",
+      "in": "ActiveRecord::RecordInvalid rescued: Email has already been taken",
+      "out": "ActiveRecord::RecordInvalid rescued: Email has already been taken"
+    },
+    {
+      "name": "an error class and method",
+      "in": "panic: runtime error in billing.Charge",
+      "out": "panic: runtime error in billing.Charge"
+    },
+    {
+      "name": "a status line",
+      "in": "Completed 500 Internal Server Error",
+      "out": "Completed 500 Internal Server Error"
+    }
+  ],
+  "prose": [
+    {
+      "name": "a person and a company, which no pattern can match",
+      "in": "Approved loan for Alice Smith of Acme Holdings",
+      "out": "Approved loan for <redacted:name> of <redacted:name>"
+    },
+    {
+      "name": "a single capitalised word is the log's own language, not a name",
+      "in": "Email has already been taken",
+      "out": "Email has already been taken"
+    },
+    {
+      "name": "http status text must survive: three capitalised words in a row",
+      "in": "Completed 500 Internal Server Error in 31ms",
+      "out": "Completed 500 Internal Server Error in 31ms"
+    },
+    {
+      "name": "other status texts",
+      "in": "Completed 422 Unprocessable Entity",
+      "out": "Completed 422 Unprocessable Entity"
+    },
+    {
+      "name": "class and method names are identifiers, never names",
+      "in": "ActiveRecord::RecordInvalid rescued in CustomersController#update",
+      "out": "ActiveRecord::RecordInvalid rescued in CustomersController#update"
+    },
+    {
+      "name": "sql keywords shout and are left alone",
+      "in": "SELECT FROM WHERE customers",
+      "out": "SELECT FROM WHERE customers"
+    },
+    {
+      "name": "go panic text survives",
+      "in": "panic: runtime error: invalid memory address",
+      "out": "panic: runtime error: invalid memory address"
+    },
+    {
+      "name": "a name at the end of a line",
+      "in": "notified account owner Bob Jones",
+      "out": "notified account owner <redacted:name>"
+    },
+    {
+      "name": "trailing punctuation does not hide a name",
+      "in": "escalated to Dana Whitfield.",
+      "out": "escalated to <redacted:name>"
+    }
+  ]
+}

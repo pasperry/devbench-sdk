@@ -1,0 +1,63 @@
+{
+  "valid": [
+    {
+      "raw": "v1/sessA/actB/0",
+      "session": "sessA",
+      "intent": "actB",
+      "hop": 0,
+      "key": "sessA/actB",
+      "next_hop": "v1/sessA/actB/1"
+    },
+    {
+      "raw": "v1/sess_A-1/act_B-2/3",
+      "session": "sess_A-1",
+      "intent": "act_B-2",
+      "hop": 3,
+      "key": "sess_A-1/act_B-2",
+      "next_hop": "v1/sess_A-1/act_B-2/4"
+    },
+    {
+      "raw": "v1/a/b/99",
+      "session": "a",
+      "intent": "b",
+      "hop": 99,
+      "key": "a/b",
+      "next_hop": ""
+    },
+    {
+      "raw": "v1/0/0/0",
+      "session": "0",
+      "intent": "0",
+      "hop": 0,
+      "key": "0/0",
+      "next_hop": "v1/0/0/1"
+    },
+    {
+      "raw": "v1/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/b/12",
+      "session": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "intent": "b",
+      "hop": 12,
+      "key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/b",
+      "next_hop": "v1/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/b/13"
+    }
+  ],
+  "invalid": [
+    "",
+    "garbage",
+    "v2/a/b/0",
+    "v1/a/b",
+    "v1/a/b/c",
+    "v1//b/0",
+    "v1/a//0",
+    "v1/a/b/-1",
+    "v1/a/b/1000",
+    "v1/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/b/0",
+    "v1/a b/c/0",
+    "v1/a/b/0/extra",
+    "V1/a/b/0",
+    "v1/a/b/0 extra",
+    "v1/a.b/c/0",
+    "v1/a/b/",
+    "/a/b/0"
+  ]
+}

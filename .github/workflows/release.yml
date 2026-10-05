@@ -1,0 +1,97 @@
+# Publish all three SDKs for one version tag (vX.Y.Z).
+#
+# Runs in the `release` environment: a human approves every publish, and the
+# environment only accepts v* tags. RubyGems and npm both use trusted
+# publishing (OIDC): no publish token exists anywhere. Go needs no registry:
+# proxy.golang.org serves a module once its path-prefixed tag exists.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Versions agree with the tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          go_v=$(sed -n 's/^const Version = "\(.*\)"/\1/p' go/version.go go/*/version.go 2>/dev/null | head -1)
+          rb_v=$(sed -n "s/.*VERSION = '\(.*\)'.*/\1/p" ruby/lib/devbench/version.rb 2>/dev/null | head -1)
+          js_v=$(node -p "require('./browser/package.json').version")
+          echo "tag=$tag go=$go_v ruby=$rb_v browser=$js_v"
+          for v in "$go_v" "$rb_v" "$js_v"; do
+            [ "$v" = "$tag" ] || { echo "::error::SDK versions must all equal the tag $tag"; exit 1; }
+          done
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: check
+    uses: ./.github/workflows/ci.yml
+
+  ruby:
+    needs: [check, test]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # trusted publishing
+    defaults:
+      run:
+        working-directory: ruby
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      - uses: rubygems/configure-rubygems-credentials@v1.0.0
+      - run: gem build devbench.gemspec
+      - run: gem push "devbench-${{ needs.check.outputs.version }}.gem"
+
+  npm:
+    needs: [check, test]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing (OIDC): no token exists to leak
+    defaults:
+      run:
+        working-directory: browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      # Trusted publishing needs npm >= 11.5.1. The package's trusted
+      # publisher (pasperry/devbench-sdk, release.yml, environment release)
+      # is configured on npmjs.com after the one manual first publish.
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm run build
+      - run: npm publish --access public
+
+  go:
+    needs: [check, test]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write # push the module tags
+    steps:
+      - uses: actions/checkout@v4
+      # Modules in subdirectories are versioned by path-prefixed tags.
+      - run: |
+          v="v${{ needs.check.outputs.version }}"
+          git tag "go/$v" "$GITHUB_SHA"
+          tags="go/$v"
+          if [ -f go/gin/go.mod ]; then git tag "go/gin/$v" "$GITHUB_SHA"; tags="$tags go/gin/$v"; fi
+          git push origin $tags

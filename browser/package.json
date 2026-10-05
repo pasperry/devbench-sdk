@@ -1,0 +1,46 @@
+{
+  "name": "devbench",
+  "version": "0.5.0",
+  "description": "Dev Bench browser sensor: errors, failed and slow requests, slow pages, counted per problem. One script tag or one call.",
+  "license": "MIT",
+  "repository": "github:pasperry/devbench-sdk",
+  "homepage": "https://github.com/pasperry/devbench-sdk#readme",
+  "keywords": ["error-monitoring", "errors", "monitoring", "angularjs", "performance", "sentry-alternative"],
+  "type": "module",
+  "main": "dist/devbench.esm.js",
+  "module": "dist/devbench.esm.js",
+  "types": "dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/devbench.esm.js",
+      "default": "./dist/devbench.esm.js"
+    },
+    "./dist/*": "./dist/*",
+    "./package.json": "./package.json"
+  },
+  "unpkg": "dist/devbench.min.js",
+  "jsdelivr": "dist/devbench.min.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": [
+    "./dist/devbench.js",
+    "./dist/devbench.min.js",
+    "./dist/adt.iife.js"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "size": "node scripts/size.mjs",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test": "node scripts/build.mjs && node scripts/build-tests.mjs && node --expose-gc --test .test-build/*.test.js",
+    "check": "npm run typecheck && npm run test && npm run size",
+    "prepublishOnly": "npm run check"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}

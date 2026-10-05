@@ -1,0 +1,192 @@
+[
+  {
+    "name": "go-error-with-frames",
+    "signal": {
+      "kind": "error",
+      "source": "server",
+      "service": "go-billing",
+      "type": "*errors.errorString",
+      "message": "failed to persist invoice 40912",
+      "frames": [
+        {
+          "function": "billing.(*Invoicer).Persist",
+          "file": "/home/dev/src/acme/services/billing/invoice.go",
+          "line": 214
+        }
+      ]
+    },
+    "expected_fp": "928369bb9094e4e29255bd2f58c390e9d471e5e76aa161906ad1e9b1e88c6912",
+    "normalized": {
+      "kind": "error",
+      "source": "server",
+      "service": "go-billing",
+      "type": "*errors.errorString",
+      "template": "failed to persist invoice \u003cnum\u003e",
+      "frames": [
+        "billing.(*Invoicer).Persist@services/billing/invoice.go"
+      ]
+    }
+  },
+  {
+    "name": "rails-validation-error",
+    "signal": {
+      "kind": "error",
+      "source": "server",
+      "service": "rails-api",
+      "type": "ActiveRecord::RecordInvalid",
+      "message": "Validation failed: Email has already been taken",
+      "frames": [
+        {
+          "function": "CustomersController#update",
+          "file": "app/controllers/customers_controller.rb",
+          "line": 42
+        }
+      ]
+    },
+    "expected_fp": "12e8c7192f46da7fa8e83a7a3392d26fe38f3b013d5c74f97e983497e8dcdf55",
+    "normalized": {
+      "kind": "error",
+      "source": "server",
+      "service": "rails-api",
+      "type": "ActiveRecord::RecordInvalid",
+      "template": "Validation failed: Email has already been taken",
+      "frames": [
+        "CustomersController#update@app/controllers/customers_controller.rb"
+      ]
+    }
+  },
+  {
+    "name": "client-uncaught",
+    "signal": {
+      "kind": "error",
+      "source": "client",
+      "type": "TypeError",
+      "message": "Cannot read property 'email' of undefined",
+      "frames": [
+        {
+          "function": "CustomerCtrl.save",
+          "file": "https://app.example.com/assets/js/app.js?v=8f21a",
+          "line": 1204
+        }
+      ]
+    },
+    "expected_fp": "699ec09691f2756ca283a4600f7de2c08706da49b6b1715c6a61b7880203d16c",
+    "normalized": {
+      "kind": "error",
+      "source": "client",
+      "service": "",
+      "type": "TypeError",
+      "template": "Cannot read property \u003cstr\u003e of undefined",
+      "frames": [
+        "CustomerCtrl.save@assets/js/app.js"
+      ]
+    }
+  },
+  {
+    "name": "client-digested-bundle",
+    "signal": {
+      "kind": "error",
+      "source": "client",
+      "type": "TypeError",
+      "message": "Cannot read property 'email' of undefined",
+      "frames": [
+        {
+          "function": "CustomerCtrl.save",
+          "file": "https://staging.example.com/assets/application-3f9a2b0c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80.js",
+          "line": 18822
+        }
+      ]
+    },
+    "expected_fp": "20ebad3e69f0bb4a8cf5aa5a9151c3bf9ff0c3ab3b2641d17c5c857467e0f848",
+    "normalized": {
+      "kind": "error",
+      "source": "client",
+      "service": "",
+      "type": "TypeError",
+      "template": "Cannot read property \u003cstr\u003e of undefined",
+      "frames": [
+        "CustomerCtrl.save@assets/application.js"
+      ]
+    }
+  },
+  {
+    "name": "client-vite-bundle",
+    "signal": {
+      "kind": "error",
+      "source": "client",
+      "type": "TypeError",
+      "message": "Cannot read property 'email' of undefined",
+      "frames": [
+        {
+          "function": "save",
+          "file": "https://app.example.com/assets/index-BRxHn9vj.js",
+          "line": 1
+        }
+      ]
+    },
+    "expected_fp": "bdfaf5ca22fbfc84bc6e67aeae7916a52006f9dff21a1c929c63cb62e5050976",
+    "normalized": {
+      "kind": "error",
+      "source": "client",
+      "service": "",
+      "type": "TypeError",
+      "template": "Cannot read property \u003cstr\u003e of undefined",
+      "frames": [
+        "save@assets/index.js"
+      ]
+    }
+  },
+  {
+    "name": "client-silent-failure",
+    "signal": {
+      "kind": "silent_failure",
+      "source": "client",
+      "type": "write_readback_divergence",
+      "message": "PUT /api/customers/9912 returned 200 but customers.email did not change"
+    },
+    "expected_fp": "569225987ac24c4307447127b8b31a45111ec79cd9bad2d6eba8d17a05d63bd5",
+    "normalized": {
+      "kind": "silent_failure",
+      "source": "client",
+      "service": "",
+      "type": "write_readback_divergence",
+      "template": "PUT /api/customers/\u003cnum\u003e returned \u003cnum\u003e but customers.email did not change",
+      "frames": []
+    }
+  },
+  {
+    "name": "log-template",
+    "signal": {
+      "kind": "log_template",
+      "source": "sidecar",
+      "service": "rails-api",
+      "message": "Completed 500 Internal Server Error in 254ms"
+    },
+    "expected_fp": "dc3db26969c597d3ccdb4096a3998573d4e25d771dd3f0a063d33ec5a6df815e",
+    "normalized": {
+      "kind": "log_template",
+      "source": "sidecar",
+      "service": "rails-api",
+      "type": "",
+      "template": "Completed \u003cnum\u003e Internal Server Error in \u003cdur\u003e",
+      "frames": []
+    }
+  },
+  {
+    "name": "no-frames-no-type",
+    "signal": {
+      "kind": "degradation",
+      "source": "client",
+      "message": "heap grew 42MB over 18 interactions on /invoices"
+    },
+    "expected_fp": "6099f084a7c094aa8682d557303226032682c578bc908b84c10ae1e7cc84b196",
+    "normalized": {
+      "kind": "degradation",
+      "source": "client",
+      "service": "",
+      "type": "",
+      "template": "heap grew 42MB over \u003cnum\u003e interactions on /invoices",
+      "frames": []
+    }
+  }
+]

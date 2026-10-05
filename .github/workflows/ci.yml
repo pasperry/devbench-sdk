@@ -1,0 +1,101 @@
+# Tests for all three SDKs. Runs on every push and PR, and is called by
+# release.yml before anything is published.
+#
+# The shared vectors in testdata/ bind the SDKs to one fingerprinting and
+# redaction contract; DEVBENCH_TESTDATA points every SDK at them and
+# ADT_REQUIRE_VECTORS turns a missing file into a failure rather than a skip.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  DEVBENCH_TESTDATA: ${{ github.workspace }}/testdata
+  ADT_REQUIRE_VECTORS: '1'
+
+jobs:
+  go:
+    name: Go ${{ matrix.go }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 1.22 is the declared minimum: adding the SDK must never force a
+        # consumer's toolchain forward.
+        go: ['1.22', '1.25']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+      - name: gofmt
+        if: matrix.go == '1.25'
+        working-directory: go
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: SDK
+        working-directory: go
+        run: |
+          go vet ./...
+          go test -race ./...
+      - name: gin adapter
+        working-directory: go/gin
+        run: |
+          go vet ./...
+          go test -race ./...
+
+  ruby:
+    name: Ruby ${{ matrix.ruby }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ['3.2', '3.3']
+    defaults:
+      run:
+        working-directory: ruby
+    env:
+      ADT_REQUIRE_RAILS: '1'
+      ADT_REQUIRE_SIDEKIQ: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+      # Test-only: the gem itself has zero runtime dependencies.
+      - run: |
+          gem install --no-document railties -v '~> 8.0.0'
+          gem install --no-document activejob -v '~> 8.0.0'
+          gem install --no-document sidekiq -v '~> 7.3.0'
+          gem install --no-document minitest
+      - name: tests (warnings from lib/ fail the build)
+        run: |
+          for f in test/*_test.rb; do
+            echo "== $f"
+            ruby -w -Ilib -Itest "$f" 2> >(tee /tmp/stderr.txt >&2)
+            if grep -q "$(pwd)/lib/.*warning:" /tmp/stderr.txt; then echo "warnings from lib/"; exit 1; fi
+          done
+      - run: gem build devbench.gemspec
+
+  browser:
+    name: Browser
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: browser/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run size
