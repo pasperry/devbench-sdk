@@ -76,9 +76,21 @@ jobs:
       # publisher (pasperry/devbench-sdk, release.yml, environment release)
       # is configured on npmjs.com after the one manual first publish.
       - run: npm install -g npm@latest
-      - run: npm ci
-      - run: npm run build
-      - run: npm publish --access public
+      # A version already on npm (e.g. the one manual first publish, needed
+      # before trusted publishing can be configured) is skipped, not failed:
+      # npm versions are immutable and republishing errors.
+      - id: published
+        run: |
+          if npm view "devbench@${{ needs.check.outputs.version }}" version >/dev/null 2>&1; then
+            echo "devbench@${{ needs.check.outputs.version }} is already on npm; skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.published.outputs.skip != 'true'
+        run: npm ci
+      - if: steps.published.outputs.skip != 'true'
+        run: npm run build
+      - if: steps.published.outputs.skip != 'true'
+        run: npm publish --access public
 
   go:
     needs: [check, test]
