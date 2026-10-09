@@ -179,11 +179,12 @@ func TestReportHandled_ConcurrentCallersNeverBlock(t *testing.T) {
 	for _, state := range []string{"absent", "stalled", "present"} {
 		t.Run(state, func(t *testing.T) {
 			var s *sidecar
+			var wedged *stalled
 			switch state {
 			case "absent":
 				useSocket(t, socketPath(t))
 			case "stalled":
-				useSocket(t, stalledSidecar(t))
+				wedged = wedgedWriter(t)
 			case "present":
 				s = listenSidecar(t)
 			}
@@ -197,13 +198,22 @@ func TestReportHandled_ConcurrentCallersNeverBlock(t *testing.T) {
 			})
 			total := time.Since(start)
 
-			// The bound has to separate "never waits on I/O" from "waits on the
-			// socket", not measure scheduler noise: a caller that blocked on a
-			// stalled sidecar would wait out the 250ms write deadline. 150ms
-			// sits well under that and well over what -race on a busy CI
-			// runner costs a non-blocking send (a 50ms bound flaked at 50.8ms).
-			if worst > 150*time.Millisecond {
+			// The stalled case is the one that tells "never waits on I/O"
+			// from "waits on the socket", and it does so two ways that do not
+			// depend on scheduler noise (a 150ms bound against the production
+			// 250ms write deadline flaked at 230ms under -race on CI):
+			//   - its writer is wedged for the whole test, so a caller that
+			//     waited on the writer would not return within the bound;
+			//   - a caller that wrote for itself opens its own connection,
+			//     which never blocks (a small line fits a fresh socket
+			//     buffer), so it is caught by the connection, not the clock.
+			if worst > nonBlockingBound {
 				t.Errorf("slowest ReportHandled took %v with the sidecar %s", worst, state)
+			}
+			if wedged != nil {
+				if n := wedged.accepted.Load(); n != 1 {
+					t.Errorf("the stalled sidecar accepted %d connections, want only the wedged writer's: a caller did its own I/O", n)
+				}
 			}
 			if total > 5*time.Second {
 				t.Errorf("%d calls took %v", goroutines*perG, total)

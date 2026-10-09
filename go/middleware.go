@@ -22,7 +22,9 @@ import (
 // site, trace, user), and then re-panicked with the same value, so whatever
 // the application or net/http does with a panic still happens exactly as
 // before. ADT observes; it never swallows. http.ErrAbortHandler is net/http's
-// control-flow panic and is re-panicked without a report.
+// control-flow panic and is re-panicked without a report. To answer the
+// panic with a 500 rather than net/http's empty reply, wrap Recover around
+// this.
 //
 // Only the request's own goroutine is covered: a panic in a goroutine the
 // handler starts is outside any middleware's reach and still crashes the

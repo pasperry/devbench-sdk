@@ -267,6 +267,59 @@ class LogTeeTest < Minitest::Test
     end
   end
 
+  # A multi-line message (an exception and its backtrace) reaches triage
+  # one line each, framed by the trace once, blank lines dropped (#24).
+  def test_a_multi_line_message_is_held_one_line_each
+    logger = plain_logger
+    Devbench::Logs.install(logger)
+    within('v1/sessM/actM/0') do
+      logger.error("  \nNoMethodError (boom):\n\n  \napp/models/deal.rb:7:in `score'\r\napp/x.rb:1:in `y'\n")
+      logger.info('after')
+    end
+
+    assert_equal ['[v1/sessM/actM/0] ERROR NoMethodError (boom):',
+                  "[v1/sessM/actM/0] ERROR app/models/deal.rb:7:in `score'",
+                  "[v1/sessM/actM/0] ERROR app/x.rb:1:in `y'",
+                  '[v1/sessM/actM/0] INFO after'], held('sessM/actM')
+  end
+
+  def test_an_exceptions_backtrace_is_held_one_frame_each
+    logger = plain_logger
+    Devbench::Logs.install(logger)
+    error = RuntimeError.new('an exception')
+    error.set_backtrace(["app/a.rb:1:in `a'", "app/b.rb:2:in `b'"])
+    within('v1/sessE/actE/0') { logger.error(error) }
+
+    assert_equal ['[v1/sessE/actE/0] ERROR an exception (RuntimeError)',
+                  "[v1/sessE/actE/0] ERROR app/a.rb:1:in `a'",
+                  "[v1/sessE/actE/0] ERROR app/b.rb:2:in `b'"], held('sessE/actE')
+  end
+
+  # One deep backtrace must not push the rest of the request out of a
+  # 200-line slice: the top of it is kept, and the cut is said.
+  def test_a_long_multi_line_message_keeps_its_top
+    logger = plain_logger
+    Devbench::Logs.install(logger)
+    within('v1/sessT/actT/0') { logger.error((0...120).map { |i| "frame #{i}" }.join("\n")) }
+
+    lines = held('sessT/actT')
+    assert_equal Devbench::Logs::MAX_MESSAGE_LINES, lines.length
+    assert_equal '[v1/sessT/actT/0] ERROR frame 0', lines.first
+    assert_equal '[v1/sessT/actT/0] ERROR frame 48', lines[-2]
+    assert_equal '[v1/sessT/actT/0] ERROR ... (71 more lines)', lines.last
+  end
+
+  def test_invalid_bytes_in_a_multi_line_message_do_not_break_capture
+    logger = plain_logger(File.open(File::NULL, 'w'))
+    Devbench::Logs.install(logger)
+    within('v1/sessY/actY/0') { logger.info("bad \xff\nbytes \xfe".b) }
+
+    lines = held('sessY/actY')
+    assert_equal 2, lines.length, lines.inspect
+    assert(lines.all?(&:valid_encoding?))
+    assert_equal '[v1/sessY/actY/0] INFO bytes ', lines.last
+  end
+
   def test_invalid_bytes_do_not_break_capture
     logger = plain_logger(File.open(File::NULL, 'w'))
     Devbench::Logs.install(logger)
@@ -427,6 +480,63 @@ class BroadcastLoggerCaptureTest < Minitest::Test
     within('v1/sessG/actG/0') { logger.tagged('t') { runs += 1 } }
 
     assert_equal 1, runs
+  end
+
+  # ActionDispatch::DebugExceptions#log_array logs an exception as ONE
+  # message, joining its lines with "\n" + the logger's tags_text. Held as
+  # it came, it reached triage as repeated "[<uuid>] [<trace>]" fragments
+  # (#24): each line is held on its own, the app's tags removed.
+  def rails_log_array(logger, lines)
+    logger.fatal(lines.join("\n#{logger.formatter.tags_text}"))
+  end
+
+  def test_a_rails_exception_is_held_one_line_each_without_its_tags
+    io = StringIO.new
+    logger = rails_logger(io)
+    Devbench::Logs.install(logger)
+    within('v1/sessT/actT/0') do
+      logger.tagged('0f7c-req', 'v1/sessT/actT/0') do
+        rails_log_array(logger, ['  ', 'NoMethodError (boom):', '  ', "app/models/deal.rb:7:in `score'",
+                                 "app/controllers/deals_controller.rb:3:in `update'"])
+      end
+    end
+
+    assert_equal ['[v1/sessT/actT/0] FATAL NoMethodError (boom):',
+                  "[v1/sessT/actT/0] FATAL app/models/deal.rb:7:in `score'",
+                  "[v1/sessT/actT/0] FATAL app/controllers/deals_controller.rb:3:in `update'"],
+                 held('sessT/actT')
+    # The app's own log keeps its tags on every line, as Rails wrote them.
+    assert_equal 5, io.string.scan('[0f7c-req] [v1/sessT/actT/0] ').size, io.string
+  end
+
+  # The tags come from the app's logger wherever it sits in the broadcast.
+  def test_the_tags_are_the_apps_even_when_ours_is_first
+    app = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new(StringIO.new))
+    app.level = Logger::INFO
+    logger = ActiveSupport::BroadcastLogger.new(app)
+    Devbench::Logs.install(logger)
+    logger.broadcasts.unshift(logger.broadcasts.pop) # ours first
+    assert_kind_of Devbench::Logs::CaptureLogger, logger.broadcasts.first
+    within('v1/sessF/actF/0') do
+      app.tagged('req-9') do
+        logger.fatal("NoMethodError (boom):\n#{app.formatter.tags_text}app/x.rb:1:in `y'")
+      end
+    end
+
+    assert_equal ['[v1/sessF/actF/0] FATAL NoMethodError (boom):', "[v1/sessF/actF/0] FATAL app/x.rb:1:in `y'"],
+                 held('sessF/actF')
+  end
+
+  # Rails < 7.1: Rails.logger is the TaggedLogging logger itself, teed.
+  def test_a_teed_tagged_logger_holds_the_exception_without_its_tags
+    logger = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new(StringIO.new))
+    assert_equal :tee, Devbench::Logs.install(logger)
+    within('v1/sessP/actP/0') do
+      logger.tagged('req-2') { rails_log_array(logger, ['NoMethodError (boom):', "app/x.rb:1:in `y'"]) }
+    end
+
+    assert_equal ['[v1/sessP/actP/0] FATAL NoMethodError (boom):', "[v1/sessP/actP/0] FATAL app/x.rb:1:in `y'"],
+                 held('sessP/actP')
   end
 
   def test_installing_twice_joins_once

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/url"
@@ -43,9 +44,20 @@ const (
 	envLegacyDSN = "ADT_DSN"
 )
 
-// releaseEnvFallbacks are the CI and platform variables that commonly carry
-// the deployed commit, tried in order when DEVBENCH_RELEASE is unset.
-var releaseEnvFallbacks = []string{"GIT_SHA", "SOURCE_VERSION", "RENDER_GIT_COMMIT"}
+// releaseEnvFallbacks are the deploy-tool and platform variables that
+// commonly carry the deployed commit, tried in order after the REVISION file
+// when no release is configured. Common sources only; never an app's own.
+var releaseEnvFallbacks = []string{
+	"HEROKU_SLUG_COMMIT", "KAMAL_VERSION", "GITHUB_SHA",
+	"GIT_SHA", "SOURCE_VERSION", "RENDER_GIT_COMMIT",
+}
+
+// revisionFile is where Capistrano-style deploys write the deployed commit,
+// in the app root (for a Go binary: its working directory).
+const revisionFile = "REVISION"
+
+// revisionMaxBytes bounds the read: a commit or tag, not a document.
+const revisionMaxBytes = 255
 
 // Options configures the SDK. Every field is optional: an empty field falls
 // back to its environment variable, then to a default.
@@ -57,9 +69,11 @@ type Options struct {
 	// Service names this application. Default: DEVBENCH_SERVICE, then the
 	// last element of the main module's path, then "app".
 	Service string
-	// Release identifies the deployed build. Default: DEVBENCH_RELEASE,
-	// GIT_SHA, SOURCE_VERSION, RENDER_GIT_COMMIT, the vcs.revision Go
-	// stamped into the binary, else "".
+	// Release identifies the deployed build. Default, first found:
+	// DEVBENCH_RELEASE, the first line of ./REVISION (Capistrano),
+	// HEROKU_SLUG_COMMIT, KAMAL_VERSION, GITHUB_SHA, GIT_SHA,
+	// SOURCE_VERSION, RENDER_GIT_COMMIT, the vcs.revision Go stamped into
+	// the binary, else "".
 	Release string
 	// Disabled turns reporting off entirely, like DEVBENCH_ENABLED=false.
 	Disabled bool
@@ -162,7 +176,7 @@ func resetConfig() {
 func resolve(opts Options) *config {
 	c := &config{
 		service: firstNonEmpty(opts.Service, os.Getenv(EnvService), defaultService()),
-		release: firstNonEmpty(opts.Release, os.Getenv(EnvRelease), envRelease(), vcsRevision()),
+		release: resolveRelease(opts.Release),
 	}
 
 	if opts.Disabled || isFalse(os.Getenv(EnvEnabled)) {
@@ -277,6 +291,40 @@ func isMajorVersion(s string) bool {
 		}
 	}
 	return true
+}
+
+// resolveRelease applies the release order (Options.Release documents it).
+// Each source is consulted only if every earlier one is empty.
+func resolveRelease(explicit string) string {
+	for _, source := range []func() string{
+		func() string { return explicit },
+		func() string { return os.Getenv(EnvRelease) },
+		revisionFileRelease,
+		envRelease,
+		vcsRevision,
+	} {
+		if v := strings.TrimSpace(source()); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// revisionFileRelease is the first line of ./REVISION, or "" when there is
+// none or it cannot be read.
+func revisionFileRelease() string {
+	f, err := os.Open(revisionFile)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return ""
+	}
+	buf := make([]byte, revisionMaxBytes)
+	n, _ := io.ReadFull(f, buf)
+	line, _, _ := strings.Cut(string(buf[:n]), "\n")
+	return strings.TrimSpace(line)
 }
 
 func envRelease() string {

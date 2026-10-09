@@ -44,11 +44,11 @@ const (
 	// batchMax bounds how many queued reports share one connection.
 	batchMax = 256
 
-	// dialTimeout and writeTimeout bound how long a wedged sidecar can hold
-	// the writer. They never touch the caller, but a short bound keeps the
-	// queue moving so a recovered sidecar sees fresh reports quickly.
-	dialTimeout  = 100 * time.Millisecond
-	writeTimeout = 250 * time.Millisecond
+	// dialTimeout and writeTimeout (below) bound how long a wedged sidecar
+	// can hold the writer. They never touch the caller, but a short bound
+	// keeps the queue moving so a recovered sidecar sees fresh reports
+	// quickly.
+	dialTimeout = 100 * time.Millisecond
 
 	// After a failed dial the writer waits before trying again, doubling up
 	// to backoffMax, so an absent sidecar does not become a busy loop.
@@ -69,6 +69,12 @@ const (
 	// reader managing even ~150 KB/s keeps up.
 	maxWrite = 32 << 10
 )
+
+// writeTimeout is the deadline for each maxWrite bytes written. A variable
+// only so tests can widen it: with a deadline of seconds, a caller that
+// waited on a wedged sidecar takes seconds, which no amount of scheduler
+// noise imitates. Never changed outside tests, and only while no writer runs.
+var writeTimeout = 250 * time.Millisecond
 
 // message is one control-socket line, before encoding.
 //
@@ -100,9 +106,13 @@ type ReporterStats struct {
 	Failed uint64
 }
 
-var stats struct {
+// counters is one set of report counts.
+type counters struct {
 	sent, dropped, failed atomic.Uint64
 }
+
+// stats is the process-wide set behind Stats(), shared by both transports.
+var stats counters
 
 // Stats returns the reporter's counters. Cheap; safe to call from anywhere.
 func Stats() ReporterStats {
@@ -121,6 +131,22 @@ type reporter struct {
 	stop    chan struct{} // closed by Close: drain and exit
 	stopped chan struct{} // closed by the writer on exit
 	closing sync.Once
+
+	// own counts this reporter's reports alone (each is also counted in
+	// stats), so a caller can tell what happened to its own reports when
+	// other reporters and the direct transport share the process.
+	own counters
+}
+
+// The reporter's count helpers: each count goes to the reporter and to the
+// process-wide Stats().
+func (r *reporter) sent(n uint64)    { r.own.sent.Add(n); stats.sent.Add(n) }
+func (r *reporter) dropped(n uint64) { r.own.dropped.Add(n); stats.dropped.Add(n) }
+func (r *reporter) failed(n uint64)  { r.own.failed.Add(n); stats.failed.Add(n) }
+
+// counts returns this reporter's own counters.
+func (r *reporter) counts() ReporterStats {
+	return ReporterStats{Sent: r.own.sent.Load(), Dropped: r.own.dropped.Load(), Failed: r.own.failed.Load()}
 }
 
 // current is the process's reporter. Close swaps it out, so the next report
@@ -175,7 +201,7 @@ func sendSocket(m message) {
 
 	select {
 	case <-r.stop:
-		stats.dropped.Add(1)
+		r.dropped(1)
 		return
 	default:
 	}
@@ -183,7 +209,7 @@ func sendSocket(m message) {
 	select {
 	case r.queue <- m:
 	default:
-		stats.dropped.Add(1)
+		r.dropped(1)
 	}
 }
 
@@ -290,7 +316,7 @@ func (r *reporter) drain(batch []message) {
 		if !r.write(batch) {
 			// The sidecar is gone; the rest would fail the same way.
 			n := uint64(len(r.queue))
-			stats.failed.Add(n)
+			r.failed(n)
 			return
 		}
 	}
@@ -303,7 +329,7 @@ func (r *reporter) write(batch []message) (ok bool) {
 	// later report would sit in a queue nobody reads.
 	defer func() {
 		if recover() != nil {
-			stats.failed.Add(uint64(len(batch)))
+			r.failed(uint64(len(batch)))
 			ok = false
 		}
 	}()
@@ -312,7 +338,7 @@ func (r *reporter) write(batch []message) (ok bool) {
 	for i := range batch {
 		line, err := json.Marshal(&batch[i])
 		if err != nil || len(line)+1 > maxLine {
-			stats.failed.Add(1)
+			r.failed(1)
 			continue
 		}
 		lines = append(lines, append(line, '\n'))
@@ -323,7 +349,7 @@ func (r *reporter) write(batch []message) (ok bool) {
 
 	conn, err := net.DialTimeout("unix", r.path, dialTimeout)
 	if err != nil {
-		stats.failed.Add(uint64(len(lines)))
+		r.failed(uint64(len(lines)))
 		return false
 	}
 	defer conn.Close()
@@ -351,12 +377,12 @@ func (r *reporter) write(batch []message) (ok bool) {
 			// A partial write may have delivered some lines of this chunk;
 			// without a reply there is no telling which, so the chunk and
 			// everything after it count as failed. Earlier chunks arrived.
-			stats.sent.Add(uint64(sent))
-			stats.failed.Add(uint64(len(lines) - sent))
+			r.sent(uint64(sent))
+			r.failed(uint64(len(lines) - sent))
 			return false
 		}
 		sent = end
 	}
-	stats.sent.Add(uint64(sent))
+	r.sent(uint64(sent))
 	return true
 }

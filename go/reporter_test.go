@@ -153,7 +153,11 @@ func TestClose_IsBoundedByTheContext(t *testing.T) {
 func TestReporter_AbsentSidecarCountsFailuresAndNeverBlocks(t *testing.T) {
 	useSocket(t, socketPath(t)) // nothing listens there
 
-	before := Stats()
+	// This reporter's own counters, not the process-wide Stats(): other
+	// tests' transports (a direct-mode flush, a writer still finishing) add
+	// to those concurrently, and once moved Sent by 2 during this test.
+	r := getReporter()
+	globalBefore := Stats()
 	start := time.Now()
 	for i := 0; i < 5000; i++ {
 		send(message{V: 1, Kind: "handled_failure", Symbol: "nobody-home"})
@@ -163,13 +167,17 @@ func TestReporter_AbsentSidecarCountsFailuresAndNeverBlocks(t *testing.T) {
 	}
 	closeReporter(t)
 
-	after := Stats()
-	lost := (after.Failed - before.Failed) + (after.Dropped - before.Dropped)
-	if lost == 0 {
-		t.Fatalf("stats did not move: before %+v after %+v", before, after)
+	got := r.counts()
+	if got.Sent != 0 {
+		t.Errorf("Sent moved with no sidecar: %+v", got)
 	}
-	if after.Sent != before.Sent {
-		t.Errorf("Sent moved with no sidecar: before %+v after %+v", before, after)
+	if got.Failed+got.Dropped != 5000 {
+		t.Errorf("failed+dropped = %d, want all 5000 sends counted as lost: %+v", got.Failed+got.Dropped, got)
+	}
+	// What this reporter lost is also in the process-wide Stats().
+	globalAfter := Stats()
+	if lost := (globalAfter.Failed - globalBefore.Failed) + (globalAfter.Dropped - globalBefore.Dropped); lost < got.Failed+got.Dropped {
+		t.Errorf("Stats() lost moved by %d, less than this reporter's %d", lost, got.Failed+got.Dropped)
 	}
 }
 
@@ -178,11 +186,11 @@ func TestReporter_AbsentSidecarCountsFailuresAndNeverBlocks(t *testing.T) {
 func TestReporter_FullQueueDropsAndCounts(t *testing.T) {
 	useSocket(t, stalledSidecar(t))
 
-	before := Stats()
+	r := getReporter() // its own counters: other transports share Stats()
 	for i := 0; i < 3*queueSize; i++ {
 		send(message{V: 1, Kind: "handled_failure", Message: strings.Repeat("y", 4096)})
 	}
-	if d := Stats().Dropped - before.Dropped; d == 0 {
+	if d := r.counts().Dropped; d == 0 {
 		t.Fatalf("no drops after %d sends into a wedged sidecar with a queue of %d", 3*queueSize, queueSize)
 	}
 }
@@ -219,11 +227,12 @@ func TestReporter_ConcurrentSendsNeverBlock(t *testing.T) {
 	for _, state := range []string{"absent", "stalled", "present"} {
 		t.Run(state, func(t *testing.T) {
 			var s *sidecar
+			var wedged *stalled
 			switch state {
 			case "absent":
 				useSocket(t, socketPath(t))
 			case "stalled":
-				useSocket(t, stalledSidecar(t))
+				wedged = wedgedWriter(t)
 			case "present":
 				s = listenSidecar(t)
 			}
@@ -231,10 +240,17 @@ func TestReporter_ConcurrentSendsNeverBlock(t *testing.T) {
 			worst := concurrentSends(t, 1000, 5, func(g, i int) {
 				send(message{V: 1, Kind: "handled_failure", Symbol: fmt.Sprintf("g%d", g)})
 			})
-			// Generous for -race on a loaded CI box; a dial or write is
-			// 100ms+ by construction, so anything doing I/O blows through.
-			if worst > 50*time.Millisecond {
+			// As in TestReportHandled_ConcurrentCallersNeverBlock: against
+			// the wedged writer, a caller that waited on it never returns
+			// within the bound, and one that wrote for itself shows up as a
+			// second connection.
+			if worst > nonBlockingBound {
 				t.Errorf("slowest send took %v with the sidecar %s", worst, state)
+			}
+			if wedged != nil {
+				if n := wedged.accepted.Load(); n != 1 {
+					t.Errorf("the stalled sidecar accepted %d connections, want only the wedged writer's: a caller did its own I/O", n)
+				}
 			}
 
 			if s != nil {
@@ -246,6 +262,11 @@ func TestReporter_ConcurrentSendsNeverBlock(t *testing.T) {
 		})
 	}
 }
+
+// nonBlockingBound is the never-blocks tests' limit on one call: over four
+// times the worst -race noise seen on CI (230ms), and far under how long a
+// call waiting on a wedged writer would take (the rest of the test).
+const nonBlockingBound = time.Second
 
 // concurrentSends runs fn from g goroutines, n times each, all released at
 // once, and returns the slowest single call.

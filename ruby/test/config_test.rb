@@ -3,6 +3,8 @@
 require 'minitest/autorun'
 require 'open3'
 require 'rbconfig'
+require 'tmpdir'
+require 'pathname'
 require 'devbench'
 
 # DSN parsing and configuration (docs/SERVER_SDK_SPEC.md, "Dev Bench naming
@@ -152,12 +154,103 @@ class ConfigurationTest < Minitest::Test
     assert_equal 'billing', config('DEVBENCH_SERVICE' => 'billing').resolved_service
   end
 
-  def test_release_falls_back_through_the_ci_variables_in_order
-    assert_equal 'r1', config('DEVBENCH_RELEASE' => 'r1', 'GIT_SHA' => 'g').resolved_release
-    assert_equal 'g', config('GIT_SHA' => 'g', 'SOURCE_VERSION' => 's').resolved_release
-    assert_equal 's', config('SOURCE_VERSION' => 's', 'RENDER_GIT_COMMIT' => 'r').resolved_release
-    assert_equal 'r', config('RENDER_GIT_COMMIT' => 'r').resolved_release
-    assert_equal '', config({}).resolved_release
+  # Every release source the SDK reads, set at once; each case removes the
+  # winner and checks the next one takes over (README "Configuration").
+  ALL_RELEASE_ENV = {
+    'DEVBENCH_RELEASE' => 'devbench', 'HEROKU_SLUG_COMMIT' => 'heroku', 'KAMAL_VERSION' => 'kamal',
+    'GITHUB_SHA' => 'github', 'GIT_SHA' => 'git', 'SOURCE_VERSION' => 'source', 'RENDER_GIT_COMMIT' => 'render'
+  }.freeze
+
+  # Runs the block in an empty app root, optionally holding a REVISION file.
+  def in_app_root(revision = nil)
+    Dir.mktmpdir('devbench-release') do |dir|
+      File.write(File.join(dir, 'REVISION'), revision) if revision
+      Dir.chdir(dir) { yield dir }
+    end
+  end
+
+  def test_release_precedence_through_every_source
+    in_app_root("rev-file\n") do
+      env = ALL_RELEASE_ENV.dup
+      assert_equal 'devbench', config(env).resolved_release
+
+      env.delete('DEVBENCH_RELEASE')
+      assert_equal 'rev-file', config(env).resolved_release, 'REVISION before every deploy variable'
+    end
+    in_app_root do
+      env = ALL_RELEASE_ENV.reject { |k, _| k == 'DEVBENCH_RELEASE' }
+      %w[heroku kamal github git source render].zip(env.keys).each do |want, name|
+        assert_equal want, config(env).resolved_release, "with #{env.keys.join(', ')} set"
+        env.delete(name)
+      end
+      assert_equal '', config(env).resolved_release
+    end
+  end
+
+  def test_release_from_explicit_config_beats_everything
+    in_app_root('rev-file') do
+      c = config(ALL_RELEASE_ENV)
+      c.release = 'from-code'
+      assert_equal 'from-code', c.resolved_release
+
+      # Set after a fallback was already resolved: still wins.
+      c = config('GIT_SHA' => 'git')
+      assert_equal 'rev-file', c.resolved_release
+      c.release = 'later'
+      assert_equal 'later', c.resolved_release
+    end
+  end
+
+  def test_release_from_the_revision_file_alone
+    in_app_root("  4f2a9c1e  \nsecond line ignored\n") do
+      assert_equal '4f2a9c1e', config({}).resolved_release
+    end
+    in_app_root("\n") { assert_equal '', config({}).resolved_release }
+    in_app_root(('a' * 300) + "\n") do
+      assert_equal 'a' * Devbench::Configuration::REVISION_MAX_BYTES, config({}).resolved_release
+    end
+    in_app_root do |dir|
+      Dir.mkdir(File.join(dir, 'REVISION'))
+      assert_equal 'kamal', config('KAMAL_VERSION' => 'kamal').resolved_release, 'a REVISION directory is skipped'
+    end
+  end
+
+  def test_release_reads_revision_from_rails_root_not_the_working_directory
+    in_app_root('from-cwd') do
+      Dir.mktmpdir('devbench-rails-root') do |root|
+        File.write(File.join(root, 'REVISION'), 'from-rails-root')
+        with_rails_root(root) { assert_equal 'from-rails-root', config({}).resolved_release }
+      end
+    end
+  end
+
+  # Points Rails.root at root for the block. Rails may already be loaded in
+  # this process (CI installs railties, and the gem loads its Railtie when
+  # it can): then only `root` is swapped, and put back after.
+  def with_rails_root(root)
+    root_path = Pathname.new(root)
+    unless defined?(::Rails)
+      rails = Module.new
+      rails.define_singleton_method(:root) { root_path }
+      Object.const_set(:Rails, rails)
+      begin
+        return yield
+      ensure
+        Object.send(:remove_const, :Rails)
+      end
+    end
+
+    original = ::Rails.singleton_class.instance_method(:root) if ::Rails.respond_to?(:root)
+    ::Rails.define_singleton_method(:root) { root_path }
+    begin
+      yield
+    ensure
+      if original
+        ::Rails.define_singleton_method(:root, original)
+      else
+        ::Rails.singleton_class.send(:remove_method, :root)
+      end
+    end
   end
 
   def test_enabled_unless_explicitly_false

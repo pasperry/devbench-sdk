@@ -22,7 +22,7 @@
 //
 //	mux := http.NewServeMux()
 //	mux.HandleFunc("GET /deals/{id}", showDeal)
-//	http.ListenAndServe(":8080", devbench.Middleware(devbench.Handled(mux)))
+//	http.ListenAndServe(":8080", devbench.Recover(devbench.Middleware(devbench.Handled(mux))))
 //
 //	// in a handler
 //	ctx := devbench.WithUser(r.Context(), devbench.User{Email: u.Email, Account: acct.ID})

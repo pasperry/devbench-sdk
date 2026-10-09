@@ -14,8 +14,8 @@ go get github.com/pasperry/devbench-sdk/go
 ```go
 import devbench "github.com/pasperry/devbench-sdk/go"
 
-// 1. Wrap your handler.
-http.ListenAndServe(":8080", devbench.Middleware(devbench.Handled(mux)))
+// 1. Wrap your handler. Recover goes outermost: it answers a panic 500.
+http.ListenAndServe(":8080", devbench.Recover(devbench.Middleware(devbench.Handled(mux))))
 
 // 2. Send server log lines to triage (slog; see "Server logs" below).
 slog.SetDefault(slog.New(devbench.NewLogHandler(slog.Default().Handler())))
@@ -57,7 +57,7 @@ environment variable:
 devbench.Init(devbench.Options{
     DSN:     os.Getenv("DEVBENCH_DSN"),
     Service: "billing", // default: DEVBENCH_SERVICE, else the main module's last path element, else "app"
-    Release: gitSHA,    // default: DEVBENCH_RELEASE, GIT_SHA, SOURCE_VERSION, RENDER_GIT_COMMIT, the binary's vcs.revision
+    Release: gitSHA,    // default: see DEVBENCH_RELEASE below
 })
 defer devbench.Close(context.Background()) // sends the last window on shutdown (bounded to 2 s)
 ```
@@ -66,7 +66,7 @@ defer devbench.Close(context.Background()) // sends the last window on shutdown 
 |---|---|
 | `DEVBENCH_DSN` (fallback `ADT_DSN`) | ingest endpoint and key; set → direct mode. Plain `http://` is accepted only for a loopback ingest |
 | `DEVBENCH_SERVICE` | service name |
-| `DEVBENCH_RELEASE` | deployed build |
+| `DEVBENCH_RELEASE` | deployed build. Unset, the first found of: a `REVISION` file in the working directory (Capistrano writes one), `HEROKU_SLUG_COMMIT`, `KAMAL_VERSION`, `GITHUB_SHA`, `GIT_SHA`, `SOURCE_VERSION`, `RENDER_GIT_COMMIT`, the commit `go build` stamped into the binary (`vcs.revision`); else empty. `Options.Release` wins over all of these |
 | `DEVBENCH_ENABLED=false` | turns everything off |
 
 An invalid DSN logs one line (never either key), turns reporting off, and never
@@ -85,9 +85,21 @@ if err := devbench.Test(ctx); err != nil {
 mux := http.NewServeMux()
 mux.HandleFunc("GET /deals/{id}", showDeal)
 
-// Trace propagation, panic capture, and the x-adt-handled header.
-http.ListenAndServe(":8080", devbench.Middleware(devbench.Handled(mux)))
+// Trace propagation, panic capture, and the x-adt-handled header; Recover
+// (outermost) turns a panic into a 500.
+http.ListenAndServe(":8080", devbench.Recover(devbench.Middleware(devbench.Handled(mux))))
 ```
+
+`Middleware` reports a panic and re-panics it with the same value, so it
+never changes what a request gets. Without `Recover`, net/http then drops
+the connection and the client sees an empty reply. `Recover` stops the panic:
+it logs it as net/http does (`http: panic serving ...` and the stack, to the
+server's `ErrorLog`) and answers `500 Internal Server Error`, without the
+headers the handler had set. If the response had already started, it aborts
+the connection instead of appending a 500 to a half-sent one.
+`http.ErrAbortHandler` passes through untouched. Leave `Recover` out if your
+own recovery middleware already answers panics, and keep that outside
+`Middleware`.
 
 ## gin
 
@@ -113,7 +125,7 @@ Log with `slog.InfoContext(c.Request.Context(), ...)` or
 
 | What | How | Reported as |
 |---|---|---|
-| Panics in a handler | automatic in the middleware: reported, then re-panicked with the same value | `exception`, context `request` |
+| Panics in a handler | automatic in the middleware: reported, then re-panicked with the same value; `Recover` answers 500 | `exception`, context `request` |
 | An error worth reporting | `devbench.CaptureException(ctx, err)` | `exception`, context `explicit` |
 | A failure deliberately absorbed | `devbench.ReportHandled(ctx, err, "billing.Invoicer.Persist")` | `handled_failure` (+ the `x-adt-handled` count) |
 | Who was affected | `ctx = devbench.WithUser(ctx, devbench.User{Email: u.Email, Account: acct.ID})` | affected users, never in evidence |

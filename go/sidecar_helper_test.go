@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -146,10 +147,27 @@ func (s *sidecar) expectNone(t *testing.T, d time.Duration) {
 // sidecar whose socket buffers fill and whose writes block.
 func stalledSidecar(t *testing.T) string {
 	t.Helper()
-	path := socketPath(t)
-	ln, err := net.Listen("unix", path)
+	return newStalledSidecar(t).path
+}
+
+// stalled is a wedged sidecar that counts the connections it accepted and can
+// be released.
+type stalled struct {
+	path     string
+	accepted atomic.Int64
+	// release ends the stall: it closes the listener and every accepted
+	// connection, so a write blocked on the sidecar fails at once instead of
+	// waiting out its deadline. Safe to call more than once; it also runs at
+	// cleanup.
+	release func()
+}
+
+func newStalledSidecar(t *testing.T) *stalled {
+	t.Helper()
+	st := &stalled{path: socketPath(t)}
+	ln, err := net.Listen("unix", st.path)
 	if err != nil {
-		t.Fatalf("listen %s: %v", path, err)
+		t.Fatalf("listen %s: %v", st.path, err)
 	}
 	var mu sync.Mutex
 	var conns []net.Conn
@@ -161,19 +179,94 @@ func stalledSidecar(t *testing.T) string {
 			if err != nil {
 				return
 			}
+			st.accepted.Add(1)
 			mu.Lock()
 			conns = append(conns, c)
 			mu.Unlock()
 		}
 	}()
-	t.Cleanup(func() {
-		_ = ln.Close()
-		<-done
-		mu.Lock()
-		for _, c := range conns {
-			_ = c.Close()
+	var once sync.Once
+	st.release = func() {
+		once.Do(func() {
+			_ = ln.Close()
+			<-done
+			mu.Lock()
+			for _, c := range conns {
+				_ = c.Close()
+			}
+			mu.Unlock()
+		})
+	}
+	t.Cleanup(st.release)
+	return st
+}
+
+// wedgedWriter points the reporter at a stalled sidecar and wedges its writer
+// there before returning: the writer is mid-write on its one connection, and
+// stays so for wedgedHold. Meanwhile nothing a caller does can reach the
+// sidecar except by doing I/O itself, and a caller that waits for the writer
+// waits until the hold ends — then the stall is released, so such a caller
+// fails the test's time bound instead of hanging the test.
+//
+// The wedge is deterministic, not a timing guess: four plug reports of 240 KB
+// are queued before the writer starts, so it takes them as one batch on one
+// connection — about 1 MB, more than any default unix socket buffer (8 KB on
+// macOS, ~208 KB on Linux) — and blocks writing it. The write deadline is
+// widened to wedgedWriteTimeout (the plug's deadline is a multiple of it), so
+// the block outlasts the hold; release ends it.
+//
+// The returned sidecar's accepted count is 1 (the writer's) when this
+// returns. Any later connection was opened by someone other than the writer.
+func wedgedWriter(t *testing.T) *stalled {
+	t.Helper()
+	st := newStalledSidecar(t)
+	setWriteTimeout(t, wedgedWriteTimeout)
+	useSocket(t, st.path)
+	t.Cleanup(st.release) // before useSocket's Close: cleanups are LIFO
+
+	r := getReporter()
+	plug := strings.Repeat("p", 240<<10)
+	for i := 0; i < 4; i++ {
+		r.queue <- message{V: 1, Kind: "handled_failure", Symbol: "plug", Message: plug}
+	}
+	r.start.Do(func() { go r.run() })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for st.accepted.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the writer never connected to the stalled sidecar")
 		}
-		mu.Unlock()
+		time.Sleep(time.Millisecond)
+	}
+	if n := len(r.queue); n != 0 {
+		t.Fatalf("the writer left %d plug reports queued; want all four in its first batch", n)
+	}
+	hold := time.AfterFunc(wedgedHold, st.release)
+	t.Cleanup(func() { hold.Stop() })
+	return st
+}
+
+const (
+	// wedgedHold is how long wedgedWriter keeps the writer wedged: three
+	// times the never-blocks bound, and over ten times what the whole
+	// burst those tests make takes under -race.
+	wedgedHold = 3 * time.Second
+	// wedgedWriteTimeout is the write deadline while a writer is wedged. The
+	// plug's deadline is a multiple of it, so it outlasts wedgedHold by far:
+	// the hold ends by release, never by the deadline.
+	wedgedWriteTimeout = 5 * time.Second
+)
+
+// setWriteTimeout sets the writer's per-chunk write deadline for this test.
+// No writer may be running while it changes (the writer reads it), so the
+// reporter is closed first, and closed again before it is restored.
+func setWriteTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	closeReporter(t)
+	old := writeTimeout
+	writeTimeout = d
+	t.Cleanup(func() {
+		closeReporter(t)
+		writeTimeout = old
 	})
-	return path
 }

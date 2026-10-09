@@ -28,6 +28,10 @@ module Devbench
     MAX_BYTES = 4 * 1024 * 1024
     MAX_AGE = 15 * 60
     MAX_LINE_BYTES = 4096
+    # Lines held from one multi-line message (an exception and its
+    # backtrace): the top of it, so one framework backtrace cannot push the
+    # rest of the request out of a 200-line slice.
+    MAX_MESSAGE_LINES = 50
 
     SEVERITY = %w[DEBUG INFO WARN ERROR FATAL].freeze
     # The last line captured on this thread, and by which hook: see #capture.
@@ -149,7 +153,7 @@ module Devbench
         if message.nil?
           message = block_given? ? yield : progname
         end
-        Logs.capture(severity, message, :broadcast)
+        Logs.capture(severity, message, :broadcast, Logs.broadcast_tags(devbench_broadcast, self))
         true
       rescue StandardError, SystemStackError
         true
@@ -157,7 +161,7 @@ module Devbench
       alias log add
 
       def <<(message)
-        Logs.capture(nil, message, :broadcast) unless Current.trace.nil?
+        Logs.capture(nil, message, :broadcast, Logs.broadcast_tags(devbench_broadcast, self)) unless Current.trace.nil?
         self
       rescue StandardError, SystemStackError
         self
@@ -257,6 +261,17 @@ module Devbench
         []
       end
 
+      # The tag prefixes of the app's loggers in a broadcast (not ours): the
+      # one Rails wrote after each newline of a multi-line message is the
+      # first broadcast's, but which logger is first is the app's choice.
+      # A Proc, so a single-line message never computes it.
+      def broadcast_tags(broadcast, own)
+        lambda do
+          loggers = broadcast&.broadcasts || []
+          loggers.reject { |l| l.equal?(own) }.filter_map { |l| tags_of(l) }
+        end
+      end
+
       # Called by Tee after the logger's own #add returned.
       def tee(logger, severity, message, progname, had_block, yielded, value)
         severity ||= ::Logger::UNKNOWN
@@ -267,32 +282,38 @@ module Devbench
 
           message = had_block ? value : progname
         end
-        capture(severity, message, :tee)
+        capture(severity, message, :tee, -> { tags_of(logger) })
       rescue StandardError, SystemStackError
         nil
       end
 
-      # Keeps one line under the current trace. Never raises.
+      # Keeps one message under the current trace — one entry per line of
+      # it (see #lines_for). Never raises. `tags` is the tag prefix of the
+      # logger written to (an Array of candidates, or a Proc giving one),
+      # needed only for a multi-line message.
       #
       # One line can reach both hooks: in a Sidekiq process Rails.logger may
       # broadcast to Sidekiq.logger. Both run on this thread, one right
       # after the other, so a line equal to the one just captured *by the
       # other hook* is that same write and is skipped. The same hook
       # repeating a line is a real repeat and is kept.
-      def capture(severity, message, source)
+      def capture(severity, message, source, tags = nil)
         return nil unless active?
 
         trace = Current.trace
         return nil if trace.nil?
 
-        line = line_for(trace, severity, message)
+        lines = lines_for(trace, severity, message, tags)
+        return nil if lines.empty?
+
+        written = lines.join("\n")
         last = Thread.current[LAST]
-        if last && last[0] != source && last[1] == line
+        if last && last[0] != source && last[1] == written
           Thread.current[LAST] = nil
           return nil
         end
-        Thread.current[LAST] = [source, line]
-        buffer.push(trace.key, line)
+        Thread.current[LAST] = [source, written]
+        lines.each { |line| buffer.push(trace.key, line) }
         start_polling if @polling_pid != Process.pid
         nil
       rescue StandardError, SystemStackError, ThreadError
@@ -310,11 +331,61 @@ module Devbench
         transport.start if transport.respond_to?(:start)
       end
 
-      # "[v1/s/i/h] INFO message", at most MAX_LINE_BYTES, valid UTF-8.
-      def line_for(trace, severity, message)
+      # "[a] [b] " — what ActiveSupport::TaggedLogging puts before a line,
+      # and what ActionDispatch::DebugExceptions puts after every newline of
+      # the exception it logs as one message. nil when the logger has none.
+      def tags_of(logger)
+        formatter = logger.respond_to?(:formatter) ? logger.formatter : nil
+        return nil unless formatter.respond_to?(:tags_text)
+
+        text = formatter.tags_text.to_s
+        text.empty? ? nil : text
+      end
+
+      # "[v1/s/i/h] INFO message", at most MAX_LINE_BYTES, valid UTF-8 —
+      # one per line of the message. A multi-line message (Rails logs an
+      # exception and its backtrace as one) is split so each line reaches
+      # triage on its own, with the logger's tags removed from the start of
+      # continuation lines (the trace frames each line once) and blank
+      # lines dropped. At most MAX_MESSAGE_LINES; when more, the last says
+      # how many were left out.
+      def lines_for(trace, severity, message, tags)
         label = severity.is_a?(Integer) ? SEVERITY[severity] : nil
+        prefix = label ? "[#{trace}] #{label} " : "[#{trace}] "
         text = message_text(message)
-        line = label ? "[#{trace}] #{label} #{text}" : "[#{trace}] #{text}"
+        text = text.dup.force_encoding(Encoding::UTF_8) unless text.encoding == Encoding::UTF_8
+        text = text.scrub('') unless text.valid_encoding?
+        return [bound_line(prefix + text)] unless text.include?("\n")
+
+        prefixes = tag_prefixes(tags)
+        parts = text.split("\n").each_with_index.filter_map do |part, i|
+          part = untag(part, prefixes) if i.positive?
+          part = part.chomp("\r")
+          part unless part.strip.empty?
+        end
+        return [] if parts.empty?
+
+        if parts.length > MAX_MESSAGE_LINES
+          omitted = parts.length - (MAX_MESSAGE_LINES - 1)
+          parts = parts.first(MAX_MESSAGE_LINES - 1) << "... (#{omitted} more lines)"
+        end
+        parts.map { |part| bound_line(prefix + part) }
+      end
+
+      # A logger whose formatter fails to give its tags costs the untagging,
+      # never the line.
+      def tag_prefixes(tags)
+        Array(tags.respond_to?(:call) ? tags.call : tags).select { |t| t.is_a?(::String) && !t.empty? }
+      rescue StandardError, SystemStackError
+        []
+      end
+
+      def untag(part, prefixes)
+        found = prefixes.find { |p| part.start_with?(p) }
+        found ? part[found.length..] : part
+      end
+
+      def bound_line(line)
         line = line.byteslice(0, MAX_LINE_BYTES) if line.bytesize > MAX_LINE_BYTES
         line = line.dup.force_encoding(Encoding::UTF_8) unless line.encoding == Encoding::UTF_8
         line.valid_encoding? ? line : line.scrub('')

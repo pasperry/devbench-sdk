@@ -50,7 +50,7 @@ gem (upgrading the gem upgrades the sensor), with **only the public part**
 of `DEVBENCH_DSN`:
 
 ```html
-<script src="https://unpkg.com/devbench@0.6.0/dist/devbench.min.js"
+<script src="https://unpkg.com/devbench@0.7.0/dist/devbench.min.js"
         data-dsn="https://<public>@adt-ingest.onrender.com" data-release="<release>" defer></script>
 ```
 
@@ -76,7 +76,7 @@ All optional except the DSN.
 |---|---|---|
 | `DEVBENCH_DSN` | — (falls back to `ADT_DSN`) | `https://<public>:<secret>@<host>[:port]` from `adt dsn create`. The server authenticates with the secret; the page gets the public part. A 0.5 `https://<key>@<host>` still works (no browser tag, see below). Plain `http://` is accepted only for localhost. |
 | `DEVBENCH_SERVICE` | your app's module, underscored (`AcmeShop` → `acme_shop`); `app` outside Rails; **`<that>-sidekiq` in a Sidekiq process** | Groups this app's issues. Set it and it wins everywhere. |
-| `DEVBENCH_RELEASE` | `GIT_SHA`, `SOURCE_VERSION`, `RENDER_GIT_COMMIT`, else empty | Which deploy an occurrence came from. |
+| `DEVBENCH_RELEASE` | the first found of: a `REVISION` file in `Rails.root` (Capistrano writes one), `HEROKU_SLUG_COMMIT`, `KAMAL_VERSION`, `GITHUB_SHA`, `GIT_SHA`, `SOURCE_VERSION`, `RENDER_GIT_COMMIT`; else empty | Which deploy an occurrence came from. `c.release` in code wins over all of these. |
 | `DEVBENCH_ENABLED` | on | `false` turns everything off: no middleware, no hooks, no tag, nothing sent. |
 
 Or from code, e.g. `config/initializers/devbench.rb`:

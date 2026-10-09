@@ -81,6 +81,27 @@ class RailsLogCaptureTest < Minitest::Test
     assert(lines.all? { |l| l.start_with?('[v1/sessR/actR/0] ') }, joined)
   end
 
+  # Rails logs the exception and its backtrace as one message with the
+  # request's tags after every newline (DebugExceptions#log_array). Each
+  # line is held on its own, with the trace once and no tag fragments (#24).
+  def test_the_exception_is_held_one_line_each_with_the_trace_once
+    request('PUT', '/deals/9', 'HTTP_X_ADT_TRACE' => 'v1/sessT/actT/0')
+
+    lines = Devbench::Logs.lookup('sessT/actT', 1000)
+    joined = lines.join("\n")
+    errors = lines.select { |l| l.start_with?('[v1/sessT/actT/0] ERROR ') }
+    assert_equal "[v1/sessT/actT/0] ERROR NoMethodError (undefined method `score' for nil):", errors.first, joined
+    # A backtrace frame (which ones depends on Rails' backtrace cleaner).
+    assert_match %r{\A\[v1/sessT/actT/0\] ERROR \S+\.rb:\d+:in .\w+'\z}, errors[1], joined
+    assert_operator errors.length, :<=, Devbench::Logs::MAX_MESSAGE_LINES
+    lines.each do |line|
+      refute_includes line, "\n"
+      assert_equal 1, line.scan('v1/sessT/actT/0').size, line
+      refute_match(/[0-9a-f]{8}-[0-9a-f]{4}-/, line, 'a request-id tag fragment')
+      refute_match(/ERROR\s*\z/, line, 'a blank line')
+    end
+  end
+
   # What the app's own logger wrote is what it writes without Dev Bench:
   # its tags, its format, the PII it chose to log — untouched.
   def test_the_apps_own_log_is_unchanged
@@ -183,5 +204,13 @@ class RailsLogDeliveryTest < Minitest::Test
     assert_includes text, 'applicant license=<redacted:field> verified by <redacted:name>'
     %w[pat.secret@example.com 4111 D1234567 Acme].each { |leak| refute_includes delivery.body, leak }
     assert(lines.all? { |l| l.start_with?('[v1/sessD/actD/0] ') && !l.start_with?('[v1/sessD/actD/0] [v1/') }, text)
+    # The exception arrives as readable lines (#24): its message, then its
+    # frames, one per line, no tag fragments; the slice bounds hold.
+    assert_includes lines, "[v1/sessD/actD/0] ERROR NoMethodError (undefined method `score' for nil):"
+    assert(lines.any? { |l| l.match?(%r{\A\[v1/sessD/actD/0\] ERROR \S+\.rb:<num>:in }) }, text)
+    refute_includes text, '<uuid>]'
+    lines.each { |l| assert_equal 1, l.scan('v1/sessD/actD/0').size, l }
+    assert_operator lines.length, :<=, 200
+    assert_operator lines.sum(&:bytesize), :<=, 64 * 1024
   end
 end

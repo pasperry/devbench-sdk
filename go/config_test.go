@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -82,18 +84,6 @@ func TestResolve_EnvironmentAndPrecedence(t *testing.T) {
 	}
 	if c := resolve(Options{Service: "svc", Release: "rel"}); c.service != "svc" || c.release != "rel" {
 		t.Errorf("service/release from Options: %+v", c)
-	}
-
-	// Release falls back through the CI variables, in order.
-	t.Setenv(EnvRelease, "")
-	t.Setenv("RENDER_GIT_COMMIT", "render-sha")
-	t.Setenv("SOURCE_VERSION", "heroku-sha")
-	if c := resolve(Options{}); c.release != "heroku-sha" {
-		t.Errorf("release = %q, want SOURCE_VERSION ahead of RENDER_GIT_COMMIT", c.release)
-	}
-	t.Setenv("GIT_SHA", "git-sha")
-	if c := resolve(Options{}); c.release != "git-sha" {
-		t.Errorf("release = %q, want GIT_SHA first", c.release)
 	}
 
 	// Disabled beats everything.
@@ -296,4 +286,103 @@ func TestInit_AgainFlushesThePreviousConfiguration(t *testing.T) {
 	if len(first.counts()) != 1 || len(second.counts()) != 1 {
 		t.Errorf("first got %v, second got %v; want one each", first.counts(), second.counts())
 	}
+}
+
+// inAppRoot runs the rest of the test in an empty working directory, holding
+// a REVISION file with the given content unless it is nil. (go 1.22: no
+// t.Chdir; these tests do not run in parallel.)
+func inAppRoot(t *testing.T, revision *string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if revision != nil {
+		if err := os.WriteFile(filepath.Join(dir, revisionFile), []byte(*revision), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
+	return dir
+}
+
+func ptr(s string) *string { return &s }
+
+// Every release source, set at once; each step unsets the winner and checks
+// the next one takes over (README "Configuration", Options.Release).
+func TestResolveRelease_PrecedenceThroughEverySource(t *testing.T) {
+	resetSDK(t)
+	t.Setenv(EnvRelease, "devbench")
+	values := map[string]string{
+		"HEROKU_SLUG_COMMIT": "heroku", "KAMAL_VERSION": "kamal", "GITHUB_SHA": "github",
+		"GIT_SHA": "git", "SOURCE_VERSION": "source", "RENDER_GIT_COMMIT": "render",
+	}
+	if len(values) != len(releaseEnvFallbacks) {
+		t.Fatalf("test covers %d variables, SDK reads %d", len(values), len(releaseEnvFallbacks))
+	}
+	for name, v := range values {
+		t.Setenv(name, v)
+	}
+	inAppRoot(t, ptr("rev-file\n"))
+
+	if got := resolve(Options{Release: "from-code"}).release; got != "from-code" {
+		t.Errorf("Options.Release: release = %q, want it ahead of everything", got)
+	}
+	if got := resolve(Options{}).release; got != "devbench" {
+		t.Errorf("release = %q, want DEVBENCH_RELEASE ahead of REVISION", got)
+	}
+	t.Setenv(EnvRelease, "")
+	if got := resolve(Options{}).release; got != "rev-file" {
+		t.Errorf("release = %q, want REVISION ahead of every deploy variable", got)
+	}
+	if err := os.Remove(revisionFile); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"HEROKU_SLUG_COMMIT", "KAMAL_VERSION", "GITHUB_SHA", "GIT_SHA", "SOURCE_VERSION", "RENDER_GIT_COMMIT"} {
+		if got := resolve(Options{}).release; got != values[name] {
+			t.Errorf("release = %q, want %s (%q) next", got, name, values[name])
+		}
+		t.Setenv(name, "")
+	}
+	// A test binary carries no vcs.revision: nothing left.
+	if got := resolve(Options{}).release; got != "" {
+		t.Errorf("no source: release = %q, want empty", got)
+	}
+}
+
+func TestResolveRelease_RevisionFile(t *testing.T) {
+	resetSDK(t)
+	t.Setenv(EnvRelease, "")
+	for _, k := range releaseEnvFallbacks {
+		t.Setenv(k, "")
+	}
+
+	for _, tc := range []struct{ name, content, want string }{
+		{"commit and newline", "4f2a9c1e\n", "4f2a9c1e"},
+		{"first line only, trimmed", "  4f2a9c1e \r\nsecond\n", "4f2a9c1e"},
+		{"blank", "\n", ""},
+		{"bounded read", strings.Repeat("a", 300), strings.Repeat("a", revisionMaxBytes)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inAppRoot(t, ptr(tc.content))
+			if got := resolve(Options{}).release; got != tc.want {
+				t.Errorf("release = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("a REVISION directory is skipped", func(t *testing.T) {
+		dir := inAppRoot(t, nil)
+		if err := os.Mkdir(filepath.Join(dir, revisionFile), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("KAMAL_VERSION", "kamal")
+		if got := resolve(Options{}).release; got != "kamal" {
+			t.Errorf("release = %q, want the next source", got)
+		}
+	})
 }

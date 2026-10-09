@@ -6,18 +6,22 @@ problem — traffic grows with distinct problems, not with page views.
 
 ## Install
 
+**Rails apps:** nothing to do here — `gem 'devbench'` renders this tag for
+you (`bin/rails generate devbench` adds `<%= devbench_script_tag %>` to your
+layout). The rest of this section is for any other web app.
+
 **One script tag.** Put it before your app's scripts:
 
 ```html
-<script src="https://unpkg.com/devbench@0.5.0/dist/devbench.min.js"
-        data-dsn="https://<ingest key>@adt-ingest.onrender.com"
+<script src="https://unpkg.com/devbench@0.7.0/dist/devbench.min.js"
+        data-dsn="https://<public key>@adt-ingest.onrender.com"
         data-release="<build sha>"></script>
 ```
 
 That is the whole install: the bundle reads `data-dsn` from its own tag and
 calls `Devbench.init` itself. `data-release` is optional. Without `data-dsn`
 the tag does nothing but define `Devbench`. (jsDelivr works the same:
-`https://cdn.jsdelivr.net/npm/devbench@0.5.0/dist/devbench.min.js`. Serving
+`https://cdn.jsdelivr.net/npm/devbench@0.7.0/dist/devbench.min.js`. Serving
 the file yourself works too — copy `dist/devbench.min.js`.)
 
 **Or npm, and one call:**
@@ -30,14 +34,16 @@ npm install devbench
 import * as Devbench from 'devbench';
 
 Devbench.init({
-  dsn: 'https://<ingest key>@adt-ingest.onrender.com',
+  dsn: 'https://<public key>@adt-ingest.onrender.com',
   release: BUILD_SHA,                              // optional
   user: { email: me.email, account: me.accountId }, // optional, if known now
 });
 ```
 
-The DSN is the browser key Dev Bench minted for this environment
-(`--source client`). It is public by design: the key is write-only. An invalid
+The DSN here is the **public** form of your environment's DSN: Dev Bench
+gives you `https://<public>:<secret>@host`; a page uses only
+`https://<public>@host` (drop `:<secret>`). The public key is write-only and
+safe to ship. The sensor refuses a DSN that still carries the secret. An invalid
 DSN never throws — it logs one `console.warn` and the sensor stays inert.
 `enabled: false` turns everything off silently (e.g. in development).
 

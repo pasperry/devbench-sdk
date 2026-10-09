@@ -109,11 +109,20 @@ module Devbench
   #                      module, underscored (AcmeShop -> acme_shop);
   #                      else "app"; with "-sidekiq" appended in a
   #                      Sidekiq process.
-  #   DEVBENCH_RELEASE   the deployed version. Default: GIT_SHA,
-  #                      SOURCE_VERSION, RENDER_GIT_COMMIT, else "".
+  #   DEVBENCH_RELEASE   the deployed version. Default, first found: the
+  #                      REVISION file in the app root (Capistrano),
+  #                      HEROKU_SLUG_COMMIT, KAMAL_VERSION, GITHUB_SHA,
+  #                      GIT_SHA, SOURCE_VERSION, RENDER_GIT_COMMIT,
+  #                      else "".
   #   DEVBENCH_ENABLED   "false" turns everything off.
   class Configuration
-    RELEASE_FALLBACKS = %w[GIT_SHA SOURCE_VERSION RENDER_GIT_COMMIT].freeze
+    # Tried in order after the REVISION file when no release is configured.
+    # Common deploy tools and platforms only; never an app's own variable.
+    RELEASE_FALLBACKS = %w[HEROKU_SLUG_COMMIT KAMAL_VERSION GITHUB_SHA GIT_SHA SOURCE_VERSION RENDER_GIT_COMMIT].freeze
+    # Capistrano writes the deployed commit here, in the release's root.
+    REVISION_FILE = 'REVISION'
+    # A commit or tag, not a document: read no more than this.
+    REVISION_MAX_BYTES = 255
     OFF = %w[false 0 no off].freeze
 
     # Strings, or nil for "not set".
@@ -125,8 +134,8 @@ module Devbench
     def initialize(env = ENV)
       @dsn = presence(env['DEVBENCH_DSN']) || presence(env['ADT_DSN'])
       @service = presence(env['DEVBENCH_SERVICE'])
-      @release = presence(env['DEVBENCH_RELEASE']) ||
-                 RELEASE_FALLBACKS.lazy.map { |name| presence(env[name]) }.find(&:itself)
+      @release = presence(env['DEVBENCH_RELEASE'])
+      @release_env = RELEASE_FALLBACKS.lazy.map { |name| presence(env[name]) }.find(&:itself)
       @enabled = !OFF.include?(env['DEVBENCH_ENABLED'].to_s.strip.downcase)
       @flush_interval = 60
     end
@@ -149,11 +158,39 @@ module Devbench
       sidekiq_server? ? "#{base}-sidekiq" : base
     end
 
+    # The release sent with every flush and on the browser tag. Explicit
+    # (configure or DEVBENCH_RELEASE) wins; else the REVISION file, read
+    # once reporting starts (after Rails has booted, so Rails.root is
+    # known); else the deploy variables in RELEASE_FALLBACKS order; else "".
     def resolved_release
-      @release.to_s
+      explicit = presence(@release)
+      return explicit if explicit
+
+      @detected_release ||= (revision_file_release || @release_env).to_s
     end
 
     private
+
+    # The first line of <app root>/REVISION, or nil when there is none or it
+    # cannot be read. The app root is Rails.root, else the working directory.
+    def revision_file_release
+      path = File.join(app_root, REVISION_FILE)
+      return nil unless File.file?(path)
+
+      presence(File.open(path, 'rb') { |f| f.read(REVISION_MAX_BYTES) }.to_s.lines.first)
+    rescue StandardError
+      nil
+    end
+
+    def app_root
+      if defined?(::Rails) && ::Rails.respond_to?(:root) && ::Rails.root
+        ::Rails.root.to_s
+      else
+        Dir.pwd
+      end
+    rescue StandardError
+      Dir.pwd
+    end
 
     def sidekiq_server?
       defined?(::Sidekiq) && ::Sidekiq.respond_to?(:server?) && ::Sidekiq.server? ? true : false
