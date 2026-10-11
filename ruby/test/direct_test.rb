@@ -86,7 +86,8 @@ class DirectFlushTest < Minitest::Test
     assert_equal 'application/json', flush.headers['content-type']
 
     body = flush.json
-    assert_equal [1, '', 'server', SERVICE, 'r1'], body.values_at('v', 'tenant', 'source', 'service', 'release')
+    assert_equal [Devbench::PROTOCOL_VERSION, '', 'server', SERVICE, 'r1'],
+                 body.values_at('v', 'tenant', 'source', 'service', 'release')
     assert_match(/\Arb-[0-9a-f]{20}\z/, body['sensor_id'])
     assert_equal 1, body['counts'].length
 
@@ -221,7 +222,7 @@ class DirectEvidenceTest < Minitest::Test
 
     bundle = put.json
     assert_equal %w[exemplars fp frames kind service template v], bundle.keys.sort
-    assert_equal [1, exception_fp(error), 'error', SERVICE],
+    assert_equal [Devbench::PROTOCOL_VERSION, exception_fp(error), 'error', SERVICE],
                  bundle.values_at('v', 'fp', 'kind', 'service')
     assert_equal 'NoMethodError at DealsController#update', bundle['template']
     assert_equal ["NoMethodError: undefined method `name' for nil (customer <email>, card <num> <num> <num> <num>) [request]"],

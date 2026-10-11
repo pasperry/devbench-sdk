@@ -31,6 +31,7 @@ require_relative 'devbench/session_middleware'
 require_relative 'devbench/rails_hooks'
 require_relative 'devbench/sidekiq_hooks'
 require_relative 'devbench/logs'
+require_relative 'devbench/widget_identity'
 require_relative 'devbench/view_helper'
 
 # The pre-0.5 name. The same module object, not a copy: ADT::Middleware *is*

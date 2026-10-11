@@ -25,6 +25,25 @@ module Devbench
     end
     private_class_method :go_re
 
+    # The card and phone rules (#186; internal/scrub/numbers.go, the
+    # `numbers` vectors): a candidate regex plus checks on the whole
+    # candidate, run in the gsub block. A rejected candidate is left as
+    # written and matching carries on after it; it is never retried shorter.
+    # No lookaround in the candidates (the Go SDK is RE2), so every SDK finds
+    # the same ones.
+    CARD = '<redacted:card>'
+    PHONE = '<redacted:phone>'
+    CARD_CANDIDATE = go_re('\b(?:\d[ \-]*?){13,19}\b')
+    # Group 1 is the character before the number (or the start of the text):
+    # a phone number is not glued to a letter, digit, `_` or `-`, which keeps
+    # a UUID's tail and `ord_123456789` out. Group 2 is the candidate.
+    PHONE_CANDIDATE = /(\A|[^A-Za-z0-9_\-])(\+?\d[\d\t\n\f\r ().\-]{7,}\d)/
+    ISO_DATE_PREFIX = /\A\d{4}-\d{2}-\d{2}(?:\z|\D)/
+    DECIMAL = /\A\d+\.\d+\z/
+    WORD_BYTE = /\A[A-Za-z0-9_]/
+    # E.164 caps a phone number at 15 digits; anything longer is an id.
+    PHONE_DIGITS = (7..15)
+
     # Ordered most-specific first, and the order is load-bearing: see the
     # comments on internal/scrub's rules (a credential containing an email,
     # a phone pattern eating an SSN).
@@ -41,9 +60,10 @@ module Devbench
              "(#{WS}*[:=]#{WS}*)(\"[^\"]*\"|'[^']*'|#{NOT_WS}+)", Regexp::IGNORECASE), '\1\2<redacted:secret>'],
       [go_re('\b[^\t\n\f\r <>@]+@[^\t\n\f\r <>@]+\.[A-Za-z]{2,}\b'), '<redacted:email>'],
       [go_re('\b\d{3}-\d{2}-\d{4}\b'), '<redacted:ssn>'],
-      [go_re('\b(?:\d[ \-]*?){13,19}\b'), '<redacted:card>'],
+      # The card and phone rules (#186) judge each candidate in the block.
+      [CARD_CANDIDATE, ->(m) { card?(m[0]) ? CARD : m[0] }],
       [go_re('\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'), '<redacted:ip>'],
-      [/\+?\d[\d\t\n\f\r ().\-]{7,}\d/, '<redacted:phone>']
+      [PHONE_CANDIDATE, ->(m) { phone?(m[2], m.string[m.end(0)].to_s) ? "#{m[1]}#{PHONE}" : m[0] }]
     ].freeze
 
     # internal/sidecar/trace.go's traceRe.
@@ -75,7 +95,33 @@ module Devbench
     class << self
       # internal/scrub.Text: every shape rule, in order.
       def text(line)
-        RULES.reduce(utf8(line)) { |out, (re, with)| out.gsub(re, with) }
+        RULES.reduce(utf8(line)) do |out, (re, with)|
+          with.is_a?(Proc) ? out.gsub(re) { with.call(Regexp.last_match) } : out.gsub(re, with)
+        end
+      end
+
+      # A card: its digits pass the Luhn check, and it is not a bare 13-digit
+      # run starting with 1 (a millisecond timestamp).
+      def card?(candidate)
+        digits = candidate.delete('^0-9')
+        return false if digits == candidate && timestamp?(digits)
+
+        luhn?(digits)
+      end
+
+      # A phone, judged with the character after it ('' at the end of the
+      # text; one character is all the check reads). Not one when a letter, digit
+      # or `_` follows; it starts with an ISO date; it is a decimal; it has
+      # fewer than 7 or more than 15 digits; or it is a bare 10- or 13-digit
+      # run starting with 1 (a timestamp).
+      def phone?(candidate, after)
+        return false if WORD_BYTE.match?(after)
+        return false if ISO_DATE_PREFIX.match?(candidate) || DECIMAL.match?(candidate)
+
+        digits = candidate.delete('^0-9')
+        return false unless PHONE_DIGITS.cover?(digits.length)
+
+        !(digits == candidate && timestamp?(digits))
       end
 
       # internal/scrub.Prose: runs of two or more capitalised words that are
@@ -152,6 +198,26 @@ module Devbench
       end
 
       private
+
+      # A Unix timestamp in seconds or milliseconds (2001 to 2033).
+      def timestamp?(digits)
+        (digits.length == 10 || digits.length == 13) && digits.start_with?('1')
+      end
+
+      def luhn?(digits)
+        return false if digits.empty?
+
+        sum = 0
+        digits.reverse.each_char.with_index do |c, i|
+          d = c.ord - 48
+          if i.odd?
+            d *= 2
+            d -= 9 if d > 9
+          end
+          sum += d
+        end
+        (sum % 10).zero?
+      end
 
       # Base redaction (template + scrub), the prose heuristic unless the
       # shape is marked 'full', then field and term rules.

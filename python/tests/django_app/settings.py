@@ -1,0 +1,9 @@
+SECRET_KEY = "test-only"
+DEBUG = False
+ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
+ROOT_URLCONF = "tests.django_app.urls"
+INSTALLED_APPS = ["devbench.django", "django.contrib.contenttypes"]
+MIDDLEWARE = ["django.middleware.common.CommonMiddleware"]
+DATABASES = {}
+USE_TZ = True
+LOGGING_CONFIG = None

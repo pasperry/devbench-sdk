@@ -12,9 +12,11 @@ module Devbench
   # trace propagation mints one and injects it into HTML responses.
   #
   # This must agree byte for byte with the Go SDK, because a token minted by a
-  # Rails app is verified by ingest. Divergence produces a request that succeeds
-  # locally and is rejected in production, with nothing to say why —
-  # testdata/session_vectors.json is what holds the two together.
+  # Rails app is verified by ingest, which uses the Go SDK's VerifySession.
+  # Divergence produces a request that succeeds locally and is rejected in
+  # production, with nothing to say why. There are no shared testdata/ vectors
+  # for session tokens yet: test/session_test.rb pins known-answer tokens the Go
+  # SDK minted, and sdk/server/go/session_kat_test.go pins the same table.
   module Session
     HEADER = 'x-adt-session'
     META_NAME = 'adt-session'
@@ -25,6 +27,7 @@ module Devbench
     # rarely — a short TTL would expire mid-session and force a refresh endpoint,
     # which is more surface in the customer's app for no security gain.
     DEFAULT_TTL = 3600
+    # Bytes, not characters, as in the Go SDK.
     MAX_SUBJECT = 128
 
     class Expired < StandardError; end
@@ -38,7 +41,7 @@ module Devbench
       raise ArgumentError, 'secret is required' if secret.nil? || secret.strip.empty?
       raise ArgumentError, 'tenant is required' if tenant.nil? || tenant.strip.empty?
 
-      subject = subject.to_s[0, MAX_SUBJECT]
+      subject = truncate_subject(subject.to_s)
       ttl = DEFAULT_TTL if ttl.nil? || ttl <= 0
 
       # The payload is pipe-delimited, so a pipe in a field would let a crafted
@@ -47,7 +50,9 @@ module Devbench
         raise ArgumentError, "tenant and subject must not contain '|'"
       end
 
-      payload = "#{tenant}|#{Time.now.to_i + ttl}|#{subject}"
+      # Bytes throughout: the signature covers the base64 of these exact bytes,
+      # whatever encoding the caller's strings carry.
+      payload = [tenant.b, (Time.now.to_i + ttl).to_s, subject.b].join('|')
       encoded = b64(payload)
 
       "#{PREFIX}.#{encoded}.#{sign(secret, encoded)}"
@@ -79,6 +84,22 @@ module Devbench
       raise Expired if Time.now.to_i > expires
 
       Token.new(fields[0], fields[2], Time.at(expires))
+    end
+
+    # At most MAX_SUBJECT bytes without splitting a UTF-8 character: backs off
+    # over at most three continuation bytes, exactly as the Go SDK's
+    # truncateSubject does, so a long subject mints the same token in both.
+    def self.truncate_subject(subject)
+      bytes = subject.b
+      return subject if bytes.bytesize <= MAX_SUBJECT
+
+      cut = MAX_SUBJECT
+      3.times do
+        break if cut.zero? || (bytes.getbyte(cut) & 0xC0) != 0x80
+
+        cut -= 1
+      end
+      bytes.byteslice(0, cut).force_encoding(subject.encoding)
     end
 
     def self.sign(secret, encoded_payload)

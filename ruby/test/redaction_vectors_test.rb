@@ -50,6 +50,14 @@ class RedactionVectorsTest < Minitest::Test
   def test_prose_vectors
     check('prose') { |line| Devbench::Scrub.prose(line) }
   end
+
+  # The card and phone rules (#186): a card passes Luhn; dates, UUIDs,
+  # prefixed ids, decimals, timestamps and long ids are not phones. The same
+  # transform as `shared`, and idempotent.
+  def test_number_vectors
+    check('numbers') { |line| Devbench::Scrub.text(line) }
+    check('numbers') { |line| Devbench::Scrub.text(Devbench::Scrub.text(line)) }
+  end
 end
 
 # The whole egress path for an exemplar — trace kept, then template, scrub,

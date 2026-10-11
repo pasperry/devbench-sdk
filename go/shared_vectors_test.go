@@ -95,6 +95,7 @@ type redactionVectors struct {
 	ServerOnly  []redactionVector `json:"server_only"`
 	MustSurvive []redactionVector `json:"must_survive"`
 	Prose       []redactionVector `json:"prose"`
+	Numbers     []redactionVector `json:"numbers"`
 }
 
 func loadRedaction(t *testing.T) redactionVectors {
@@ -103,7 +104,7 @@ func loadRedaction(t *testing.T) redactionVectors {
 	if err := json.Unmarshal(readVectors(t, "redaction_vectors.json"), &vf); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(vf.Shared) == 0 || len(vf.ServerOnly) == 0 || len(vf.MustSurvive) == 0 || len(vf.Prose) == 0 {
+	if len(vf.Shared) == 0 || len(vf.ServerOnly) == 0 || len(vf.MustSurvive) == 0 || len(vf.Prose) == 0 || len(vf.Numbers) == 0 {
 		t.Fatal("vector file is missing sections; this test would prove nothing")
 	}
 	return vf
@@ -112,11 +113,18 @@ func loadRedaction(t *testing.T) redactionVectors {
 // The shape pass and the name heuristic, each exactly as the vectors say.
 func TestRedactionVectors_ReproducedExactly(t *testing.T) {
 	vf := loadRedaction(t)
-	for _, set := range [][]redactionVector{vf.Shared, vf.ServerOnly, vf.MustSurvive} {
+	for _, set := range [][]redactionVector{vf.Shared, vf.ServerOnly, vf.MustSurvive, vf.Numbers} {
 		for _, v := range set {
 			if got := scrubText(v.In); got != v.Out {
 				t.Errorf("%s:\n  in   %q\n  got  %q\n  want %q", v.Name, v.In, got, v.Out)
 			}
+		}
+	}
+	// The card and phone rules (#186) are idempotent: a redacted line
+	// redacted again is unchanged.
+	for _, v := range vf.Numbers {
+		if again := scrubText(v.Out); again != v.Out {
+			t.Errorf("%s: not idempotent: %q -> %q", v.Name, v.Out, again)
 		}
 	}
 	for _, v := range vf.Prose {
@@ -133,7 +141,7 @@ func TestRedactionVectors_ReproducedExactly(t *testing.T) {
 func TestRedactionVectors_StrictEgress(t *testing.T) {
 	vf := loadRedaction(t)
 
-	redact := append(append(append([]redactionVector{}, vf.Shared...), vf.ServerOnly...), vf.Prose...)
+	redact := append(append(append(append([]redactionVector{}, vf.Shared...), vf.ServerOnly...), vf.Prose...), vf.Numbers...)
 	checked := 0
 	for _, v := range redact {
 		out := egressLine(v.In)

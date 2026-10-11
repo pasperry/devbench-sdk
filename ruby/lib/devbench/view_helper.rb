@@ -2,6 +2,8 @@
 
 require 'erb'
 require_relative 'version'
+require_relative 'current'
+require_relative 'widget_identity'
 
 module Devbench
   # The browser sensor's script tag, for the layout's <head>:
@@ -21,6 +23,14 @@ module Devbench
   # CSP nonce (content_security_policy_nonce_generator), the tag carries it,
   # as Rails' own `javascript_include_tag nonce: true` does.
   #
+  # Chat widget (docs/SERVER_SDK_SPEC.md, Capability 6): when
+  # DEVBENCH_WIDGET_SECRET is set and Devbench.set_user was called for this
+  # request, the tag also carries data-widget-identity="<token>", the user
+  # (and their role and chat permission) signed at render time. No secret, no
+  # user (a signed-out page) or an identity the signer refuses: no
+  # attribute, so no widget. A page carrying one is per-user; don't serve it
+  # from a shared cache.
+  #
   # Included into ActionView by the Railtie. Never raises.
   module ViewHelper
     CDN = 'https://unpkg.com'
@@ -34,6 +44,8 @@ module Devbench
       return devbench_safe('') if dsn.nil?
 
       attrs = [['src', ViewHelper.src], ['data-dsn', dsn], ['data-release', Devbench.config.resolved_release]]
+      identity = devbench_widget_identity
+      attrs << ['data-widget-identity', identity] if identity
       nonce = devbench_nonce
       attrs << ['nonce', nonce] if nonce
       html = attrs.map { |name, value| %(#{name}="#{ERB::Util.html_escape(value)}") }.join(' ')
@@ -43,6 +55,17 @@ module Devbench
     end
 
     private
+
+    # The signed widget identity for this request's user, or nil.
+    def devbench_widget_identity
+      secret = Devbench.config.widget_secret
+      user = Current.widget_user
+      return nil if secret.nil? || secret.to_s.empty? || user.nil?
+
+      WidgetIdentity.sign(secret, email: user[:email], account: user[:account], role: user[:role], chat: user[:chat])
+    rescue StandardError, SystemStackError
+      nil
+    end
 
     # Rails' content_security_policy_nonce: nil unless the app configured a
     # nonce generator.

@@ -1,7 +1,9 @@
 package devbench
 
 import (
+	"bufio"
 	"context"
+	"net"
 	"net/http"
 	"sync/atomic"
 )
@@ -83,7 +85,7 @@ func reportHandled(ctx context.Context, err error, site string) {
 	defer func() { _ = recover() }()
 
 	send(message{
-		V:       1,
+		V:       ProtocolVersion,
 		Kind:    "handled_failure",
 		Symbol:  truncateRunes(site, maxSymbol),
 		Error:   errorType(err),
@@ -130,7 +132,9 @@ func Handled(next http.Handler) http.Handler {
 	})
 }
 
-// handledWriter stamps the count at WriteHeader time.
+// handledWriter stamps the count at WriteHeader time. Flush, Hijack and
+// Unwrap pass through, so streaming (SSE) and websocket handlers behave
+// exactly as they would without Dev Bench installed.
 type handledWriter struct {
 	http.ResponseWriter
 	ctx     context.Context
@@ -151,6 +155,39 @@ func (w *handledWriter) Write(p []byte) (int, error) {
 	}
 	return w.ResponseWriter.Write(p)
 }
+
+// Flush sends the headers if they are not sent yet, so the count is stamped
+// first, like Write.
+func (w *handledWriter) Flush() { _ = w.FlushError() }
+
+// FlushError is what http.ResponseController.Flush calls, so a handler using
+// the controller still sees the error from the writer below.
+func (w *handledWriter) FlushError() error {
+	if !w.written {
+		w.mark()
+	}
+	err := http.NewResponseController(w.ResponseWriter).Flush()
+	if err == nil {
+		w.written = true
+	}
+	return err
+}
+
+// Hijack hands the connection to the handler. Nothing is stamped: a hijacked
+// connection never sends this response's headers. After a successful hijack
+// the writer counts as written, so nothing touches headers on a connection
+// the handler now owns.
+func (w *handledWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, brw, err := http.NewResponseController(w.ResponseWriter).Hijack()
+	if err == nil {
+		w.written = true
+	}
+	return conn, brw, err
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer (write
+// deadlines, full duplex).
+func (w *handledWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *handledWriter) markIfUnwritten() {
 	if !w.written {

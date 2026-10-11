@@ -44,8 +44,22 @@ module Devbench
   #
   # Each field is optional. Calling again replaces the whole identity, and
   # calling with neither clears it. Never raises.
-  def self.set_user(email: nil, account: nil)
-    Current.user = Identity.normalize(email, account)
+  #
+  # role: and chat: are for the chat widget only (docs/SERVER_SDK_SPEC.md,
+  # Capability 6): devbench_script_tag signs them, with the email and
+  # account, into the widget's identity token when DEVBENCH_WIDGET_SECRET is
+  # set. They are never sent with sensor data. role is the app's own role
+  # name for the user (mapped to chat capabilities in the tenant's settings);
+  # chat, when given, overrides that mapping: a list of capabilities
+  # (:report, :status, :howto, :feature_requests, :handoff), [] for "may not
+  # chat", nil (the default) for "not stated".
+  def self.set_user(email: nil, account: nil, role: nil, chat: nil)
+    user = Identity.normalize(email, account)
+    Current.user = user
+    # The raw values, not the sensor identity's truncated ones: the widget
+    # signer refuses what it cannot sign exactly instead of signing a
+    # different person.
+    Current.widget_user = user && { email: email, account: account, role: role, chat: chat.is_a?(Array) ? chat.dup.freeze : chat }.freeze
     nil
   rescue StandardError, SystemStackError
     nil

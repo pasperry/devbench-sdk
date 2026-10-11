@@ -407,7 +407,7 @@ module Devbench
     end
 
     def envelope(counts, overflowed)
-      body = { v: 1, tenant: '', source: 'server', service: @service, release: @release,
+      body = { v: PROTOCOL_VERSION, tenant: '', source: 'server', service: @service, release: @release,
                sensor_id: @sensor_id, counts: counts }
       body[:overflowed] = overflowed if overflowed.positive?
       JSON.generate(body)
@@ -543,7 +543,7 @@ module Devbench
       return nil if detail.nil?
 
       bundle = {
-        v: 1, fp: fp, kind: detail.kind,
+        v: PROTOCOL_VERSION, fp: fp, kind: detail.kind,
         template: Scrub.template_text(detail.text, @policy, fp), service: @service,
         exemplars: detail.exemplar.empty? ? [] : [Scrub.egress(detail.exemplar, @policy, @service)]
       }

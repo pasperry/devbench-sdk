@@ -15,20 +15,32 @@
 import { Sensor, type SensorOptions } from './sensor.js';
 import { installErrorCapture, type ErrorCaptureTargets } from './capture/errors.js';
 import { attachAngular, type AngularStatic } from './adapters/angularjs.js';
-import { warn } from './dsn.js';
+import { parseDsn, warn } from './dsn.js';
+import { WidgetLoader, type LoaderScope } from './widget/loader.js';
 
 export type UserInput = { email?: string | null; account?: string | number | null } | null | undefined;
 
 export interface InitOptions extends SensorOptions {
   /** The signed-in user, if known at init; `setUser` later for logins. */
   user?: UserInput;
+  /**
+   * The chat widget's signed identity (`dbw1.…`), rendered by your server
+   * (Rails: automatic; Go: `devbench.WidgetIdentity`). Without one the SDK
+   * makes no chat request. Role and permissions live inside the token: there
+   * is deliberately no option for them.
+   */
+  widgetIdentity?: string | null;
+  /** The chat API base. Default `https://api.developerbench.com`. */
+  api?: string;
+  /** The page's CSP nonce, put on the widget's script tag. */
+  nonce?: string;
 }
 
 /**
  * The page `init` installs onto: `window` in a browser. A parameter only so
  * tests can hand it a window-like object; apps never pass it.
  */
-export interface InitScope extends ErrorCaptureTargets {
+export interface InitScope extends ErrorCaptureTargets, Omit<LoaderScope, 'document' | 'fetch' | 'addEventListener' | 'removeEventListener'> {
   angular?: AngularStatic;
 }
 
@@ -37,9 +49,12 @@ interface Installed {
   scope: InitScope;
   teardown: Array<() => void>;
   angulars: AngularStatic[];
+  widget: WidgetLoader | null;
 }
 
 let current: Installed | null = null;
+/** A token given to `setWidgetIdentity` before `init`. */
+let pendingIdentity: string | null | undefined;
 
 export function init(options: InitOptions, scope?: InitScope): Sensor {
   let sensor: Sensor | null = null;
@@ -55,7 +70,7 @@ export function init(options: InitOptions, scope?: InitScope): Sensor {
 
     const s = sensor;
     const page: InitScope = scope ?? (globalThis as unknown as InitScope);
-    const installed: Installed = { sensor: s, scope: page, teardown: [], angulars: [] };
+    const installed: Installed = { sensor: s, scope: page, teardown: [], angulars: [], widget: null };
     current = installed;
 
     if (opts.user) s.setUser(opts.user);
@@ -63,6 +78,11 @@ export function init(options: InitOptions, scope?: InitScope): Sensor {
     installed.teardown.push(() => s.stop());
 
     if (!registerAngular(page.angular)) whenDomReady(installed);
+
+    const widget = new WidgetLoader(page as LoaderScope, s, publicKey(opts), opts.api, opts.nonce || '');
+    installed.widget = widget;
+    installed.teardown.push(() => widget.close());
+    widget.set(opts.widgetIdentity !== undefined ? opts.widgetIdentity : pendingIdentity);
     return sensor;
   } catch {
     // Half-installed is worse than not installed: undo, then stand down.
@@ -98,6 +118,26 @@ export function setUser(user: UserInput): void {
   current?.sensor.setUser(user);
 }
 
+/**
+ * Sets the chat widget's signed identity: a new token (after login or a role
+ * change) replaces the widget, `null` (logout) removes it. Before `init` it is
+ * kept for `init` to use. Takes only the token: role and permissions are
+ * signed inside it.
+ */
+export function setWidgetIdentity(token: string | null): void {
+  pendingIdentity = token;
+  current?.widget?.set(token);
+}
+
+/** The DSN's public key (or a pre-DSN `ingestKey`): the chat API's `X-ADT-Key`. */
+function publicKey(opts: InitOptions): string {
+  if (opts.dsn !== undefined) {
+    const d = parseDsn(opts.dsn);
+    return typeof d === 'string' ? '' : d.key;
+  }
+  return opts.ingestKey ?? '';
+}
+
 /** The sensor `init` installed, or null. */
 export function getSensor(): Sensor | null {
   return current ? current.sensor : null;
@@ -111,6 +151,7 @@ export function getSensor(): Sensor | null {
 export function close(): void {
   const c = current;
   current = null;
+  pendingIdentity = undefined;
   if (!c) return;
   for (const fn of c.teardown) {
     try {

@@ -101,7 +101,7 @@ func TestMiddleware_PanicIsReportedAndRepanicked(t *testing.T) {
 
 	m := s.next(t)
 	checks := map[string]any{
-		"v":       float64(1),
+		"v":       float64(ProtocolVersion),
 		"kind":    "exception",
 		"context": "request",
 		"handled": false,

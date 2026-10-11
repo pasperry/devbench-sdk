@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Transport, type FlushRequest } from '../src/transport.js';
+import { PROTOCOL_VERSION, Transport, type FlushRequest } from '../src/transport.js';
 import { startTestServer } from './helpers/server.js';
 
 function counts(n: number) {
@@ -19,7 +19,7 @@ test('phase 1 posts counts and nothing else', async (t) => {
 
   assert.equal(server.received.length, 1);
   const body = JSON.parse(server.received[0]!.body) as FlushRequest;
-  assert.equal(body.v, 1);
+  assert.equal(body.v, PROTOCOL_VERSION);
   assert.equal(body.tenant, 'acme');
   assert.equal(body.counts.length, 3);
 

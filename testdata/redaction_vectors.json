@@ -18,7 +18,14 @@
     "`prose` covers the heuristic that masks personal data with no shape to",
     "match. It is checked by the sidecar only: the browser never sees a server",
     "log line, and this heuristic is wrong in both directions by design, so it",
-    "is corrected afterwards by learned rules rather than trusted absolutely."
+    "is corrected afterwards by learned rules rather than trusted absolutely.",
+    "",
+    "`numbers` pins the card and phone rules (#186): a card must pass the Luhn",
+    "check, and the phone rule leaves ISO dates, UUIDs, prefixed ids, decimals,",
+    "Unix timestamps and ids longer than 15 digits alone while still redacting",
+    "phone numbers. It holds wherever `shared` does. The backend reads it now;",
+    "every SDK adopts it in the follow-up named in docs/SERVER_SDK_SPEC.md",
+    "(\"Redaction of field values\"), after which it is checked everywhere."
   ],
   "shared": [
     {
@@ -146,6 +153,123 @@
       "name": "trailing punctuation does not hide a name",
       "in": "escalated to Dana Whitfield.",
       "out": "escalated to <redacted:name>"
+    }
+  ],
+  "numbers": [
+    {
+      "name": "a Luhn-valid card written without separators",
+      "in": "paid with 4111111111111111",
+      "out": "paid with <redacted:card>"
+    },
+    {
+      "name": "a Luhn-valid 13-digit card",
+      "in": "card 4222222222222 declined",
+      "out": "card <redacted:card> declined"
+    },
+    {
+      "name": "a Luhn-invalid 16-digit number is not a card, and too long for a phone",
+      "in": "ref 4111111111111112 queued",
+      "out": "ref 4111111111111112 queued"
+    },
+    {
+      "name": "a Luhn-invalid 16-digit number with spaces survives too",
+      "in": "ref 4111 1111 1111 1112 queued",
+      "out": "ref 4111 1111 1111 1112 queued"
+    },
+    {
+      "name": "a 10-digit unix timestamp (seconds) is not a phone",
+      "in": "ts=1760108828 ok",
+      "out": "ts=1760108828 ok"
+    },
+    {
+      "name": "a 13-digit unix timestamp (milliseconds) is neither a phone nor a card, though Luhn-valid",
+      "in": "ts=1760108828003 ok",
+      "out": "ts=1760108828003 ok"
+    },
+    {
+      "name": "a long numeric order id",
+      "in": "order 123456789012345678 shipped",
+      "out": "order 123456789012345678 shipped"
+    },
+    {
+      "name": "an ISO date",
+      "in": "shipped 2026-10-09",
+      "out": "shipped 2026-10-09"
+    },
+    {
+      "name": "an ISO date and time",
+      "in": "at 2026-10-09 14:03:22 and 2026-10-09T14:03:22Z",
+      "out": "at 2026-10-09 14:03:22 and 2026-10-09T14:03:22Z"
+    },
+    {
+      "name": "a UUID keeps its tail",
+      "in": "order 550e8400-e29b-41d4-a716-446655440000 failed",
+      "out": "order 550e8400-e29b-41d4-a716-446655440000 failed"
+    },
+    {
+      "name": "an all-digit UUID",
+      "in": "req 12345678-1234-1234-1234-123456789012",
+      "out": "req 12345678-1234-1234-1234-123456789012"
+    },
+    {
+      "name": "an id with a prefix",
+      "in": "ord_123456789 and inv-123456789",
+      "out": "ord_123456789 and inv-123456789"
+    },
+    {
+      "name": "decimals",
+      "in": "ratio 0.123456789 total 1234567.89",
+      "out": "ratio 0.123456789 total 1234567.89"
+    },
+    {
+      "name": "a phone with spaces",
+      "in": "call 555 123 4567",
+      "out": "call <redacted:phone>"
+    },
+    {
+      "name": "a phone with dashes, dots and after an equals sign",
+      "in": "a=555-123-4567 b=555.123.4567",
+      "out": "a=<redacted:phone> b=<redacted:phone>"
+    },
+    {
+      "name": "an E.164 phone",
+      "in": "sms +15551234567 sent",
+      "out": "sms <redacted:phone> sent"
+    },
+    {
+      "name": "an international phone with spaces",
+      "in": "office +44 20 7946 0958",
+      "out": "office <redacted:phone>"
+    },
+    {
+      "name": "a bare 10-digit number not starting with 1 is still a phone",
+      "in": "callback 5551234567",
+      "out": "callback <redacted:phone>"
+    },
+    {
+      "name": "a bare 9-digit number is still a phone (only prefixed ids, 16+ digits and timestamps are exempt)",
+      "in": "order 123456789",
+      "out": "order <redacted:phone>"
+    },
+    {
+      "name": "15 digits is the longest phone (E.164)",
+      "in": "intl +123 456 789 012 345",
+      "out": "intl <redacted:phone>"
+    },
+    {
+      "name": "16 digits with separators is not a phone",
+      "in": "batch 1234 5678 9012 3456",
+      "out": "batch 1234 5678 9012 3456"
+    },
+    {
+      "name": "fewer than 7 digits is not a phone",
+      "in": "steps 1-2-3-4-5-6 done",
+      "out": "steps 1-2-3-4-5-6 done"
+    },
+    {
+      "name": "a number glued to a letter after it is not a phone",
+      "in": "build 555123456abc",
+      "out": "build 555123456abc"
     }
   ]
 }

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Session tokens prove a browser was served by the customer's real backend.
@@ -49,10 +50,14 @@ const (
 	// more surface in the customer's app for no security gain.
 	DefaultSessionTTL = time.Hour
 
-	// maxSubjectLen bounds the optional subject, so a token stays small enough
-	// to sit in a meta tag and a header without thought.
+	// maxSubjectLen bounds the optional subject, in bytes, so a token stays
+	// small enough to sit in a meta tag and a header without thought.
 	maxSubjectLen = 128
 )
+
+// sessionNow is the session clock. A test seam only: the known-answer tests
+// pin it so a minted token is the same bytes every run.
+var sessionNow = time.Now
 
 var (
 	// ErrSessionExpired means the token was valid but is past its expiry.
@@ -83,9 +88,7 @@ func MintSession(secret, tenant, subject string, ttl time.Duration) (string, err
 	if strings.TrimSpace(tenant) == "" {
 		return "", errors.New("adt: tenant is required")
 	}
-	if len(subject) > maxSubjectLen {
-		subject = subject[:maxSubjectLen]
-	}
+	subject = truncateSubject(subject)
 	if strings.ContainsAny(tenant, "|") || strings.ContainsAny(subject, "|") {
 		// The payload is pipe-delimited, so a pipe in a field would let a
 		// crafted subject forge a different tenant.
@@ -95,7 +98,7 @@ func MintSession(secret, tenant, subject string, ttl time.Duration) (string, err
 		ttl = DefaultSessionTTL
 	}
 
-	payload := fmt.Sprintf("%s|%d|%s", tenant, time.Now().Add(ttl).Unix(), subject)
+	payload := fmt.Sprintf("%s|%d|%s", tenant, sessionNow().Add(ttl).Unix(), subject)
 	encoded := base64.RawURLEncoding.EncodeToString([]byte(payload))
 
 	return tokenPrefix + "." + encoded + "." + signPayload(secret, encoded), nil
@@ -136,11 +139,26 @@ func VerifySession(secret, token string) (*SessionToken, error) {
 
 	// Expiry is checked after the signature, so an unsigned token can never
 	// reveal whether a guessed expiry was plausible.
-	if time.Now().After(expires) {
+	if sessionNow().After(expires) {
 		return nil, ErrSessionExpired
 	}
 
 	return &SessionToken{Tenant: fields[0], Subject: fields[2], Expires: expires}, nil
+}
+
+// truncateSubject keeps at most maxSubjectLen bytes without splitting a UTF-8
+// character: it backs off over at most three continuation bytes. The Ruby SDK
+// does the same byte for byte (Devbench::Session.truncate_subject), so a
+// subject over the bound mints the same token in both.
+func truncateSubject(subject string) string {
+	if len(subject) <= maxSubjectLen {
+		return subject
+	}
+	cut := maxSubjectLen
+	for i := 0; i < utf8.UTFMax-1 && cut > 0 && !utf8.RuneStart(subject[cut]); i++ {
+		cut--
+	}
+	return subject[:cut]
 }
 
 func signPayload(secret, encodedPayload string) string {

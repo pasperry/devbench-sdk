@@ -17,5 +17,5 @@ await build({
   format: 'esm',
   target: 'node22',
   sourcemap: 'inline',
-  external: ['node:*'],
+  external: ['node:*', 'playwright-core'],
 });

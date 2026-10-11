@@ -10,6 +10,7 @@ module Devbench
     KEY = :__adt_trace
     HANDLED_KEY = :__adt_handled
     USER_KEY = :__adt_user
+    WIDGET_USER_KEY = :__adt_widget_user
 
     # Counts failures handled during this request.
     #
@@ -34,6 +35,17 @@ module Devbench
       Thread.current[USER_KEY] = value
     end
 
+    # The raw identity, role and chat permission Devbench.set_user was given,
+    # for the chat widget's signed token (Devbench::WidgetIdentity); nil when
+    # no user is set. Never sent with sensor data.
+    def self.widget_user
+      Thread.current[WIDGET_USER_KEY]
+    end
+
+    def self.widget_user=(value)
+      Thread.current[WIDGET_USER_KEY] = value
+    end
+
     def self.trace
       Thread.current[KEY]
     end
@@ -50,6 +62,7 @@ module Devbench
       previous = Thread.current[KEY]
       previous_handled = Thread.current[HANDLED_KEY]
       previous_user = Thread.current[USER_KEY]
+      previous_widget_user = Thread.current[WIDGET_USER_KEY]
       Thread.current[KEY] = trace
       # Reset rather than inherit: servers reuse threads, and carrying a count
       # across requests would mark an innocent response as having swallowed
@@ -58,17 +71,20 @@ module Devbench
       # Same for identity, and more so: inheriting it would attribute one
       # user's failure to whoever this thread served before.
       Thread.current[USER_KEY] = nil
+      Thread.current[WIDGET_USER_KEY] = nil
       yield
     ensure
       Thread.current[KEY] = previous
       Thread.current[HANDLED_KEY] = previous_handled
       Thread.current[USER_KEY] = previous_user
+      Thread.current[WIDGET_USER_KEY] = previous_widget_user
     end
 
     def self.clear
       Thread.current[KEY] = nil
       Thread.current[HANDLED_KEY] = nil
       Thread.current[USER_KEY] = nil
+      Thread.current[WIDGET_USER_KEY] = nil
     end
   end
 end

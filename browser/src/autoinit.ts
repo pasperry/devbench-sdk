@@ -4,7 +4,8 @@
  *   <script src="https://unpkg.com/devbench/dist/devbench.min.js"
  *           data-dsn="https://<key>@adt-ingest.onrender.com"></script>
  *
- * Reads `data-dsn` (required) and `data-release` (optional) from
+ * Reads `data-dsn` (required), `data-release`, `data-widget-identity` and
+ * `data-api` (optional) from
  * `document.currentScript`. Where that is null, the last script whose src
  * names this bundle and that carries `data-dsn` is used instead. Without a
  * `data-dsn`, nothing happens: a page that loads the bundle and calls
@@ -15,6 +16,8 @@ import type { Sensor } from './sensor.js';
 
 interface ScriptLike {
   src?: string;
+  /** The CSP nonce: browsers hide the attribute, the property keeps it. */
+  nonce?: string;
   dataset?: Record<string, string | undefined>;
   getAttribute?(name: string): string | null;
 }
@@ -36,7 +39,14 @@ export function autoInit(scope: InitScope & { document?: unknown }): Sensor | nu
     const dsn = data(el, 'dsn');
     if (!dsn) return null;
 
-    return init({ dsn, release: data(el, 'release') || undefined }, scope);
+    return init({
+      dsn,
+      release: data(el, 'release') || undefined,
+      // The chat widget: only the signed token; a data-widget-role is never read.
+      widgetIdentity: data(el, 'widget-identity') || undefined,
+      api: data(el, 'api') || undefined,
+      nonce: nonceOf(el),
+    }, scope);
   } catch {
     return null;
   }
@@ -50,6 +60,12 @@ function findOwnScript(doc: DocLike): ScriptLike | null {
     if (s && OWN_SRC.test(s.src || '') && data(s, 'dsn')) return s;
   }
   return null;
+}
+
+function nonceOf(el: ScriptLike | null): string | undefined {
+  if (!el) return undefined;
+  const v = el.nonce || (typeof el.getAttribute === 'function' ? el.getAttribute('nonce') : '');
+  return typeof v === 'string' && v ? v : undefined;
 }
 
 function data(el: ScriptLike | null | undefined, name: string): string {

@@ -177,7 +177,7 @@ module Devbench
       # message is detail.
       def handled_payload(error, symbol, reason)
         {
-          v: 1,
+          v: PROTOCOL_VERSION,
           kind: 'handled_failure',
           symbol: symbol,
           error: safely { error.class.name },
@@ -190,7 +190,7 @@ module Devbench
 
       def exception_payload(error, context, handled, symbol)
         {
-          v: 1,
+          v: PROTOCOL_VERSION,
           kind: 'exception',
           context: CONTEXTS.include?(context) ? context : 'explicit',
           handled: handled ? true : false,

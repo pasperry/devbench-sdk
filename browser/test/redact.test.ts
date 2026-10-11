@@ -77,6 +77,13 @@ test('redactText removes PII shapes with the right label', () => {
   assert.equal(redactText('nothing sensitive'), 'nothing sensitive');
 });
 
+// The phone candidate's separators are Go's \s ([\t\n\f\r ]), as in every
+// other SDK. With JS's \s, a no-break space would join two phones into one
+// 20-digit candidate, too long to be a phone, and both would leave as written.
+test('two phones joined by a no-break space are each redacted', () => {
+  assert.equal(redactText('555 123 4567\u00a0555 123 4567'), '<redacted:phone>\u00a0<redacted:phone>');
+});
+
 test('redactUrl keeps path shape and drops identifiers and query', () => {
   assert.equal(redactUrl('https://app.example.com/api/customers/9912?token=secret'), '/api/customers/<id>');
   assert.equal(redactUrl('/api/c/c8f2a1b4-1111-4222-8333-444455556666'), '/api/c/<uuid>');
@@ -136,12 +143,22 @@ test('the shared redaction vectors hold in the browser SDK', async () => {
   const vectors = JSON.parse(raw) as {
     shared: Array<{ name: string; in: string; out: string }>;
     must_survive: Array<{ name: string; in: string; out: string }>;
+    numbers: Array<{ name: string; in: string; out: string }>;
   };
 
   assert.ok(vectors.shared.length > 0, 'no shared vectors; this test proves nothing');
 
   for (const v of vectors.shared) {
     assert.equal(redactText(v.in), v.out, `${v.name}: ${v.in}`);
+  }
+
+  // The card and phone rules (#186): a card passes Luhn; dates, UUIDs,
+  // prefixed ids, decimals, timestamps and long ids are not phones. Same
+  // transform as `shared`, and idempotent.
+  assert.ok(vectors.numbers.length > 0, 'no numbers vectors; this test proves nothing');
+  for (const v of vectors.numbers) {
+    assert.equal(redactText(v.in), v.out, `numbers: ${v.name}: ${v.in}`);
+    assert.equal(redactText(v.out), v.out, `numbers: ${v.name}: not idempotent`);
   }
 
   // A redactor that eats the diagnostic content is useless.

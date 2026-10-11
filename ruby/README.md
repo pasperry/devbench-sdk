@@ -78,6 +78,7 @@ All optional except the DSN.
 | `DEVBENCH_SERVICE` | your app's module, underscored (`AcmeShop` → `acme_shop`); `app` outside Rails; **`<that>-sidekiq` in a Sidekiq process** | Groups this app's issues. Set it and it wins everywhere. |
 | `DEVBENCH_RELEASE` | the first found of: a `REVISION` file in `Rails.root` (Capistrano writes one), `HEROKU_SLUG_COMMIT`, `KAMAL_VERSION`, `GITHUB_SHA`, `GIT_SHA`, `SOURCE_VERSION`, `RENDER_GIT_COMMIT`; else empty | Which deploy an occurrence came from. `c.release` in code wins over all of these. |
 | `DEVBENCH_ENABLED` | on | `false` turns everything off: no middleware, no hooks, no tag, nothing sent. |
+| `DEVBENCH_WIDGET_SECRET` | — | The chat widget's secret (`dbws_…`, from the account page). Set, signed-in pages carry the signed identity the widget needs (below). Never reaches the page. |
 
 Or from code, e.g. `config/initializers/devbench.rb`:
 
@@ -189,6 +190,30 @@ end
   evidence, and triage sees counts of affected users and accounts.
 - The middleware clears it when the request ends (Sidekiq: when the job
   ends), so the next request on the same thread never inherits it.
+
+### Chat widget identity
+
+The chat widget (off by default) is shown only to signed-in users your
+server vouches for. With `DEVBENCH_WIDGET_SECRET` set, `devbench_script_tag`
+signs the user `set_user` recorded for the request into
+`data-widget-identity`, at render time. Nothing else to write. A signed-out
+page (no `set_user`) gets no attribute and no widget.
+
+Optionally, say what this user may do in the chat:
+
+```ruby
+Devbench.set_user(email: current_user.email, account: current_dealer.id,
+                  role: current_user.role,          # your role name; mapped in the widget settings
+                  chat: [:report, :howto, :handoff]) # overrides the mapping; [] = may not chat
+```
+
+Capabilities: `:report`, `:status`, `:howto`, `:feature_requests`,
+`:handoff`. `role` and `chat` go only into the signed token, never with
+sensor data. An identity that can't be signed exactly (a field over 255
+characters, a control character such as a line break, an unknown
+capability) gets no token rather than a truncated one, and one
+`[devbench]` warning. Pages carrying a token are
+per-user: don't serve them from a shared cache.
 
 ## Reporting what you caught
 

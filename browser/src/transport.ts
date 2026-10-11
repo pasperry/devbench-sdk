@@ -13,6 +13,15 @@ import type { Count } from './counters.js';
 import { readSessionToken, SESSION_HEADER } from './trace.js';
 
 /**
+ * The wire format this SDK speaks: the `v` every payload carries (the flush
+ * body and the evidence bundle). Not the release VERSION: it changes only for
+ * a breaking wire change, and ingest tells formats apart by it. It must equal
+ * `current` in testdata/protocol_vectors.json (docs/SERVER_SDK_SPEC.md,
+ * "Protocol version"); send it, never a literal. Exported from the entry point.
+ */
+export const PROTOCOL_VERSION = 1;
+
+/**
  * Phase 1 carries counts and signal class only — no message text, no templates,
  * no stacks.
  *
@@ -25,7 +34,7 @@ import { readSessionToken, SESSION_HEADER } from './trace.js';
  * either way, so nothing is lost but detail, and only temporarily.
  */
 export interface FlushRequest {
-  v: 1;
+  v: typeof PROTOCOL_VERSION;
   tenant: string;
   source: 'client';
   release: string;
@@ -151,7 +160,7 @@ export class Transport {
    */
   private split(counts: Count[], extra: { overflowed?: number; dropped?: number }, limit: number, out: string[]): void {
     const body: FlushRequest = {
-      v: 1,
+      v: PROTOCOL_VERSION,
       tenant: this.opts.tenant,
       source: 'client',
       release: this.opts.release,

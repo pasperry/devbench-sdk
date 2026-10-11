@@ -52,3 +52,30 @@ class TraceVectorsTest < Minitest::Test
     end
   end
 end
+
+# The protocol version, shared with every SDK and ingest
+# (docs/SERVER_SDK_SPEC.md, "Protocol version"). The gem sends
+# PROTOCOL_VERSION as `v` in every payload (the wire tests in direct_test,
+# exceptions_test and adt_test assert that); this holds the constant to the
+# vectors, so a gem speaking a version ingest refuses cannot pass.
+class ProtocolVectorsTest < Minitest::Test
+  VECTORS_PATH = File.join(ENV['DEVBENCH_TESTDATA'] || File.expand_path('../../../../testdata', __dir__),
+                           'protocol_vectors.json')
+  VECTORS = File.exist?(VECTORS_PATH) ? JSON.parse(File.read(VECTORS_PATH)) : nil
+
+  def setup
+    return if VECTORS
+    flunk "missing #{VECTORS_PATH}" if ENV['ADT_REQUIRE_VECTORS'] == '1'
+    skip 'shared protocol vectors live in the ADT repo (testdata/), not in a vendored gem'
+  end
+
+  def test_the_declared_version_is_the_current_one
+    assert_kind_of Integer, Devbench::PROTOCOL_VERSION
+    assert_equal VECTORS.fetch('current'), Devbench::PROTOCOL_VERSION
+  end
+
+  def test_the_declared_version_is_supported_and_not_refused
+    assert_includes VECTORS.fetch('supported'), Devbench::PROTOCOL_VERSION
+    refute_includes VECTORS.fetch('refused'), Devbench::PROTOCOL_VERSION
+  end
+end

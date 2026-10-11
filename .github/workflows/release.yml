@@ -1,37 +1,35 @@
-# Publish all three SDKs for one version tag (vX.Y.Z).
+# Publish one SDK per tag: ruby-vX.Y.Z, browser-vX.Y.Z, go-vX.Y.Z or python-vX.Y.Z.
+#
+# The `check` job maps the tag to its SDK (.github/scripts/release-tag.sh)
+# and each publish job runs only for its own SDK, so a tag never publishes
+# another SDK. A bare vX.Y.Z (the old all-SDK form) fails in `check`.
 #
 # Runs in the `release` environment: a human approves every publish, and the
-# environment only accepts v* tags. RubyGems and npm both use trusted
-# publishing (OIDC): no publish token exists anywhere. Go needs no registry:
-# proxy.golang.org serves a module once its path-prefixed tag exists.
+# environment only accepts the release tag patterns. RubyGems, npm and PyPI all
+# use trusted publishing (OIDC): no publish token exists anywhere. Go needs no
+# registry: proxy.golang.org serves a module once its path-prefixed tag
+# exists, which is why Go is triggered by go-v* and its module tags
+# (go/vX.Y.Z, go/gin/vX.Y.Z) are created only by the approved job.
 name: release
 
 on:
   push:
-    tags: ['v*']
+    tags: ['ruby-v*', 'browser-v*', 'go-v*', 'python-v*', 'v*']
 
 permissions:
   contents: read
 
 jobs:
   check:
-    name: Versions agree with the tag
+    name: Tag names one SDK whose version matches
     runs-on: ubuntu-latest
     outputs:
+      sdk: ${{ steps.v.outputs.sdk }}
       version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - id: v
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          go_v=$(sed -n 's/^const Version = "\(.*\)"/\1/p' go/version.go go/*/version.go 2>/dev/null | head -1)
-          rb_v=$(sed -n "s/.*VERSION = '\(.*\)'.*/\1/p" ruby/lib/devbench/version.rb 2>/dev/null | head -1)
-          js_v=$(node -p "require('./browser/package.json').version")
-          echo "tag=$tag go=$go_v ruby=$rb_v browser=$js_v"
-          for v in "$go_v" "$rb_v" "$js_v"; do
-            [ "$v" = "$tag" ] || { echo "::error::SDK versions must all equal the tag $tag"; exit 1; }
-          done
-          echo "version=$tag" >> "$GITHUB_OUTPUT"
+        run: .github/scripts/release-tag.sh "$GITHUB_REF_NAME"
 
   test:
     needs: check
@@ -39,6 +37,7 @@ jobs:
 
   ruby:
     needs: [check, test]
+    if: needs.check.outputs.sdk == 'ruby'
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -66,6 +65,7 @@ jobs:
 
   npm:
     needs: [check, test]
+    if: needs.check.outputs.sdk == 'browser'
     runs-on: ubuntu-latest
     environment: release
     env:
@@ -107,6 +107,7 @@ jobs:
 
   go:
     needs: [check, test]
+    if: needs.check.outputs.sdk == 'go'
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -126,3 +127,35 @@ jobs:
             fi
           done
           [ -z "$tags" ] || git push origin $tags
+
+  pypi:
+    needs: [check, test]
+    if: needs.check.outputs.sdk == 'python'
+    runs-on: ubuntu-latest
+    # PyPI's trusted publisher for `devbench` names this repo, release.yml and
+    # this environment: renaming any of them breaks the publish.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install --upgrade build
+      - working-directory: python
+        run: python -m build --outdir ../dist
+      # Exactly the tagged version's sdist and wheel, nothing else: the
+      # upload below takes every file in dist/.
+      - run: |
+          v="${{ needs.check.outputs.version }}"
+          got="$(ls dist | sort | tr '\n' ' ')"
+          want="devbench-$v-py3-none-any.whl devbench-$v.tar.gz "
+          [ "$got" = "$want" ] || { echo "::error::dist/ holds '$got', want '$want'"; exit 1; }
+      # skip-existing: a re-run after a partial release skips what is already
+      # out instead of failing on it, like the RubyGems and npm jobs.
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true

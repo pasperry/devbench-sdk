@@ -130,11 +130,16 @@ module Devbench
     # Seconds between background flushes in direct mode (spec: 60).
     attr_accessor :flush_interval
     attr_writer :enabled
+    # The tenant's chat widget secret (dbws_…, DEVBENCH_WIDGET_SECRET), or
+    # nil. Signs the widget identity on the browser tag; never leaves the
+    # server.
+    attr_accessor :widget_secret
 
     def initialize(env = ENV)
       @dsn = presence(env['DEVBENCH_DSN']) || presence(env['ADT_DSN'])
       @service = presence(env['DEVBENCH_SERVICE'])
       @release = presence(env['DEVBENCH_RELEASE'])
+      @widget_secret = presence(env['DEVBENCH_WIDGET_SECRET'])
       @release_env = RELEASE_FALLBACKS.lazy.map { |name| presence(env[name]) }.find(&:itself)
       @enabled = !OFF.include?(env['DEVBENCH_ENABLED'].to_s.strip.downcase)
       @flush_interval = 60

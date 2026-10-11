@@ -55,7 +55,7 @@ func TestReportHandled_SendsHandledFailureToTheSidecar(t *testing.T) {
 
 	m := s.next(t)
 	want := map[string]any{
-		"v":       float64(1),
+		"v":       float64(ProtocolVersion),
 		"kind":    "handled_failure",
 		"symbol":  "billing.Invoicer.Persist",
 		"error":   "*devbench.conflictError",

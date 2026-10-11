@@ -46,6 +46,13 @@ class LoggingDealsController < ActionController::Base
     render plain: 'ok'
   end
 
+  # A signed-in page: the app's before_action sets the user, with a role
+  # and a chat permission, and the layout's tag signs them for the widget.
+  def signed_in_page
+    Devbench.set_user(email: 'Pat@Dealer.com', account: 'dealer-1182', role: 'dealer_staff', chat: %i[report howto])
+    page
+  end
+
   # A layout's <head>, as the generator leaves it.
   def page
     render inline: "<html><head><title>x</title>\n<%= devbench_script_tag %>\n</head><body></body></html>"
@@ -56,4 +63,5 @@ DevbenchLogsTestApp.routes.draw do
   put '/deals/:id' => 'logging_deals#update'
   get '/ok' => 'logging_deals#ok'
   get '/page' => 'logging_deals#page'
+  get '/signed_in_page' => 'logging_deals#signed_in_page'
 end

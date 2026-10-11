@@ -1,0 +1,46 @@
+[build-system]
+# 77: the SPDX `license` string and `license-files` (PEP 639); the older
+# table form is deprecated and stops building after 2027-02-18.
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devbench"
+dynamic = ["version"]
+description = "Dev Bench server SDK for Python: errors, who was affected, and the server log lines of a failing request, for Django, FastAPI, Flask and Celery."
+readme = "README.md"
+requires-python = ">=3.9"
+# Every Dev Bench SDK is MIT (#244); tools/publish-sdk/license_test.go
+# holds this and the LICENSE beside it to the public repo's.
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Dev Bench" }]
+# None at runtime: the standard library only. The integrations import their
+# framework, which the app already has.
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Framework :: Django",
+    "Framework :: FastAPI",
+    "Framework :: Flask",
+    "Framework :: Celery",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://developerbench.com"
+Source = "https://github.com/pasperry/devbench-sdk"
+
+[tool.setuptools]
+packages = [
+    "devbench",
+    "devbench.django",
+    "devbench.django.management",
+    "devbench.django.management.commands",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "devbench.version.VERSION" }
+
+[tool.setuptools.package-data]
+devbench = ["py.typed"]

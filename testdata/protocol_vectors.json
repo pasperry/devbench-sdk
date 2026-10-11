@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "SDK protocol version vectors (docs/SERVER_SDK_SPEC.md, \"Protocol version\").",
+    "",
+    "`current` is the protocol version every SDK in this repository declares and",
+    "sends as `v` in each payload. `supported` is every version ingest accepts;",
+    "`current` is always in it. `refused` are versions ingest must answer with",
+    "400 \"unsupported version\".",
+    "",
+    "Pinned to internal/protocol by internal/protocol/protocol_test.go. Edit both",
+    "together, and only for a breaking wire change."
+  ],
+  "current": 1,
+  "supported": [1],
+  "refused": [0, 2, -1]
+}

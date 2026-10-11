@@ -1,4 +1,4 @@
-# Tests for all three SDKs. Runs on every push and PR, and is called by
+# Tests for every SDK. Runs on every push and PR, and is called by
 # release.yml before anything is published.
 #
 # The shared vectors in testdata/ bind the SDKs to one fingerprinting and
@@ -87,6 +87,29 @@ jobs:
             if grep -qE ', [1-9][0-9]* skips' /tmp/stdout.txt; then echo "skipped tests in $f"; exit 1; fi
           done
       - run: gem build devbench.gemspec
+
+  python:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the declared minimum (requires-python); 3.13 is current.
+        python: ['3.9', '3.13']
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # Test-only: the package itself has no runtime dependencies.
+      - run: python -m pip install django flask fastapi uvicorn celery build
+      # Every framework and vector file required: a missing one fails, and
+      # a skipped test fails the build (run_tests.sh).
+      - run: PYTHON=python ./run_tests.sh
+      - run: python -m build --outdir "$RUNNER_TEMP/dist"
 
   browser:
     name: Browser

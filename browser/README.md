@@ -106,6 +106,40 @@ Evidence uploads go to presigned object-storage URLs on a separate host; add
 that host to `connect-src` as well when your Dev Bench account names one
 (today: `https://*.storage.supabase.co`).
 
+## Chat widget
+
+An optional chat panel for your signed-in users, off until you turn it on in
+Dev Bench. The SDK loads it only when **your server** vouches for the user
+with a signed token (`DEVBENCH_WIDGET_SECRET`; Rails renders it for you,
+Go has `devbench.WidgetIdentity`):
+
+```html
+<script src="https://unpkg.com/devbench/dist/devbench.min.js"
+        data-dsn="https://<public key>@adt-ingest.onrender.com"
+        data-widget-identity="dbw1.…"></script>
+```
+
+or `Devbench.init({ dsn, widgetIdentity })`, or later
+`Devbench.setWidgetIdentity(token)` (after login, or a role change) and
+`Devbench.setWidgetIdentity(null)` (logout: removes the widget).
+
+- **No token, no request.** Without one the SDK makes no chat call at all.
+- With one, after the page's `load` (in idle time) it asks
+  `GET https://api.developerbench.com/v1/chat/widget` (`data-api` /
+  `init({ api })` to override), with your public key and the token, never
+  cookies, 5 s timeout. Only an `enabled: true` answer loads the widget: a
+  separate script (`dist/devbench-widget.min.js`, its own size budget; the
+  core bundle does not grow), inserted with its SRI `integrity` and
+  `crossorigin="anonymous"` and the tag's CSP `nonce`. Anything else: no
+  widget, one `console.debug`, no retry. The answer is cached in
+  `sessionStorage` for 10 minutes per user.
+- **Role and permissions come only from the signed token.** There is no
+  option for them: a `role`, `chat` or `permissions` key passed to `init`, or
+  a `data-widget-role` attribute, is ignored.
+- CSP: add `https://cdn.jsdelivr.net` to `script-src` (the widget bundle) and
+  `https://api.developerbench.com` to `connect-src`. The widget's styles are
+  constructed stylesheets in a shadow root, so `style-src` needs nothing.
+
 ## What is captured automatically
 
 **Errors.** Uncaught errors, unhandled rejections, `console.error`,
@@ -184,6 +218,12 @@ No mocks. The transport is tested against a real HTTP server, because it talks
 to a route we own. `npm test` builds `dist/` first, so the shipped bundles
 themselves are tested (`test/bundle.test.ts`). `npm publish` runs the checks
 first (`prepublishOnly`).
+
+The chat widget is tested in a real browser (`test/widget.browser.test.ts`:
+Google Chrome via `playwright-core`; `CHROME_PATH` for another binary; no
+browser is a failure, not a skip), with the page and the chat API on separate
+origins. The chat API there is a local stand-in built from docs/CHAT_API.md
+(`test/helpers/chat-standin.ts`) until the real service (#69) ships.
 
 ### What is *not* covered yet
 

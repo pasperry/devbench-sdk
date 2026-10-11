@@ -83,7 +83,7 @@ func reportPanic(ctx context.Context, v any) {
 	}
 
 	m := message{
-		V:       1,
+		V:       ProtocolVersion,
 		Kind:    "exception",
 		Context: "request",
 		Handled: new(bool),
@@ -135,7 +135,7 @@ func CaptureException(ctx context.Context, err error) {
 	}
 
 	send(message{
-		V:       1,
+		V:       ProtocolVersion,
 		Kind:    "exception",
 		Context: "explicit",
 		Handled: &handledTrue,

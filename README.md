@@ -13,9 +13,10 @@ setting (`DEVBENCH_DSN`) to configure.
 | **Browser** | `<script src="https://unpkg.com/devbench" data-dsn="https://KEY@ingest…"></script>` or `npm install devbench` | `data-dsn`, or `Devbench.init({ dsn })` |
 | **Rails / Ruby** | `gem 'devbench'` | `DEVBENCH_DSN` |
 | **Go** | `go get github.com/pasperry/devbench-sdk/go` | `DEVBENCH_DSN`, then one middleware |
+| **Python** (Django, FastAPI, Flask, Celery) | `pip install devbench` | `DEVBENCH_DSN` |
 
 Details per SDK: [`browser/`](browser/README.md), [`ruby/`](ruby/README.md),
-[`go/`](go/README.md).
+[`go/`](go/README.md), [`python/`](python/README.md).
 
 ## What the sensors send
 
@@ -24,7 +25,7 @@ that happens ten thousand times is one fingerprint with a count. Detail
 (stack, a redacted message) is sent once per new problem, when asked for.
 Emails, phone numbers, card numbers, tokens and similar are removed in the
 SDK before anything leaves your process; the same redaction test vectors
-(`testdata/`) bind all three SDKs. Who was affected is sent only if your app
+(`testdata/`) bind every SDK. Who was affected is sent only if your app
 calls `setUser`, and never enters fingerprints or messages.
 
 ## Never harm the host
@@ -35,9 +36,14 @@ reports are dropped, not queued.
 
 ## Versions
 
-All three SDKs share one version number, bumped on every change to any of
-them: `Devbench.VERSION` (browser), `Devbench::VERSION` (Ruby),
-`devbench.Version` (Go).
+Each SDK has its own version and is released on its own tag:
+`browser-vX.Y.Z` (npm `devbench`, `Devbench.VERSION`), `ruby-vX.Y.Z`
+(RubyGems `devbench`, `Devbench::VERSION`), `python-vX.Y.Z` (PyPI `devbench`,
+`devbench.version.VERSION`) and `go-vX.Y.Z` (`devbench.Version`; the Go
+modules themselves are tagged `go/vX.Y.Z` and `go/gin/vX.Y.Z`, which is what
+`go get` uses). What the SDKs must agree on is the wire format: each
+declares the protocol version it speaks, and Dev Bench accepts every
+supported one.
 
 ## License
 

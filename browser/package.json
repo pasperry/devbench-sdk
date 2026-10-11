@@ -28,7 +28,9 @@
   "sideEffects": [
     "./dist/devbench.js",
     "./dist/devbench.min.js",
-    "./dist/adt.iife.js"
+    "./dist/adt.iife.js",
+    "./dist/devbench-widget.min.js",
+    "./dist/devbench-widget.js"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -41,6 +43,7 @@
   "devDependencies": {
     "@types/node": "^26.6.2",
     "esbuild": "^0.25.0",
+    "playwright-core": "^1.64.0",
     "typescript": "^5.7.0"
   }
 }

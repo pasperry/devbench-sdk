@@ -13,23 +13,72 @@
 import { sha256Hex } from './sha256.js';
 
 /**
+ * The card and phone rules (#186; internal/scrub/numbers.go, the `numbers`
+ * section of testdata/redaction_vectors.json). Each is a candidate regex plus
+ * checks on the whole candidate, run in the `replace` callback. A rejected
+ * candidate is left as written and matching carries on after it; it is never
+ * retried shorter. No lookaround: the Go SDK is RE2, and every SDK must find
+ * the same candidates.
+ *
+ * A bare 10- or 13-digit run starting with 1 is a Unix timestamp (seconds or
+ * milliseconds): no 10-digit North American number and no 13-digit card
+ * starts with 1.
+ */
+const CARD = '<redacted:card>';
+const PHONE = '<redacted:phone>';
+
+const isTimestamp = (d: string): boolean => (d.length === 10 || d.length === 13) && d[0] === '1';
+
+function luhn(d: string): boolean {
+  let sum = 0;
+  for (let i = 0; i < d.length; i++) {
+    let n = d.charCodeAt(d.length - 1 - i) - 48;
+    if (i % 2) n = n > 4 ? n * 2 - 9 : n * 2;
+    sum += n;
+  }
+  return d !== '' && sum % 10 === 0;
+}
+
+/** A card: its digits pass Luhn, and it is not a bare millisecond timestamp. */
+function isCard(c: string): boolean {
+  const d = c.replace(/\D/g, '');
+  return !(d === c && isTimestamp(d)) && luhn(d);
+}
+
+/**
+ * A phone, judged with the character after it. Not one when a letter, digit
+ * or `_` follows; it starts with an ISO date; it is a decimal; it has fewer
+ * than 7 or more than 15 (E.164) digits; or it is a bare timestamp.
+ */
+function isPhone(c: string, next: string): boolean {
+  if (/\w/.test(next) || /^\d{4}-\d{2}-\d{2}(?:$|\D)/.test(c) || /^\d+\.\d+$/.test(c)) return false;
+  const d = c.replace(/\D/g, '');
+  return d.length >= 7 && d.length <= 15 && !(d === c && isTimestamp(d));
+}
+
+/**
  * Ordered most-specific first.
  *
- * The phone pattern is deliberately greedy — it has to be, to catch the many
- * shapes a phone number takes — so it will happily swallow an SSN or a card
- * number if it runs first. Everything is still redacted either way, but the
+ * The phone candidate is deliberately greedy — it has to be, to catch the
+ * many shapes a phone number takes — so it would swallow an SSN or a card
+ * number if it ran first. Everything is still redacted either way, but the
  * label would be wrong, and a mislabelled redaction is a worse signal for
  * whoever reads the issue later.
  */
-const PII_PATTERNS: Array<[RegExp, string]> = [
-  [/\b[^\s<>@]+@[^\s<>@]+\.[A-Za-z]{2,}\b/g, '<redacted:email>'],
-  [/\b\d{3}-\d{2}-\d{4}\b/g, '<redacted:ssn>'],
-  [/\b(?:\d[ -]*?){13,19}\b/g, '<redacted:card>'],
-  // No leading \b. A word boundary cannot match before `+`, so the previous
-  // pattern left the `+` of `+1 (555) 123-4567` outside the redaction. Caught
-  // by testdata/redaction_vectors.json, which the sidecar checks too — the
-  // two implementations have to agree or one leaks what the other removes.
-  [/\+?\d[\d\s().-]{7,}\d/g, '<redacted:phone>'],
+const PII_PATTERNS: Array<[RegExp, (...m: string[]) => string]> = [
+  [/\b[^\s<>@]+@[^\s<>@]+\.[A-Za-z]{2,}\b/g, () => '<redacted:email>'],
+  [/\b\d{3}-\d{2}-\d{4}\b/g, () => '<redacted:ssn>'],
+  [/\b(?:\d[ -]*?){13,19}\b/g, (m) => (isCard(m) ? CARD : m)],
+  // Group 1 is the character before the number (or the start of the text):
+  // a phone number is not glued to a letter, digit, `_` or `-`, which keeps
+  // a UUID's tail and `ord_123456789` out. There is no leading \b, which
+  // could not match before the `+` of `+1 (555) 123-4567`. Go's \s, not
+  // JS's: a wider separator set joins two phones into one candidate too long
+  // to be a phone, and both would leave unredacted.
+  [
+    /(^|[^A-Za-z0-9_-])(\+?\d[\d\t\n\f\r ().-]{7,}\d)/g,
+    (m, pre, c, at, s) => (isPhone(c, s.charAt(+at + m.length)) ? pre + PHONE : m),
+  ],
 ];
 
 export interface RedactionConfig {

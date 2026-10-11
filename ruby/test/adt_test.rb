@@ -153,6 +153,7 @@ class ReporterTest < Minitest::Test
 
       refute_nil received, 'nothing reached the sidecar socket'
       payload = JSON.parse(received)
+      assert_equal ADT::PROTOCOL_VERSION, payload['v']
       assert_equal 'handled_failure', payload['kind']
       assert_equal 'CustomersController#update', payload['symbol']
       assert_equal 'ArgumentError', payload['error']

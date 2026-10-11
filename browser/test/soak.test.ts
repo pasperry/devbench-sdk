@@ -13,9 +13,9 @@ import { BUDGET } from '../src/budget.js';
  * the footprint budget holds.
  *
  * It measures *our* data structures, which is where the leak risk actually
- * lives: ring buffers, the counter table, and the pending-write list. A browser
- * soak driving a real page covers the capture hooks and DOM overhead and runs
- * nightly — see scripts/soak-browser.mjs.
+ * lives: ring buffers, the counter table, and the pending-write list. The
+ * capture hooks and DOM overhead are not soaked yet: a browser soak driving a
+ * real page is #228.
  *
  * Duration is scaled by ADT_SOAK_EVENTS so CI runs it short on every PR and
  * long on a schedule.
@@ -23,12 +23,35 @@ import { BUDGET } from '../src/budget.js';
 
 const EVENTS = Number(process.env.ADT_SOAK_EVENTS ?? 200_000);
 
-function heapUsed(): number {
+// How often the loop yields to the event loop, in events.
+const YIELD_EVERY = 1_000;
+
+/** Lets the event loop turn once, as a page does between user events. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * Heap in use by live objects, after the test harness has let go of its own.
+ *
+ * `node:test` tracks every async resource a test creates (an async_hooks
+ * `init` hook files it in a Map) and forgets it in the `destroy` hook, which
+ * Node runs from the event loop only after GC has collected the resource. The
+ * sensor creates one per event: Node implements even the synchronous
+ * `crypto.getRandomValues` (trace ids) with an async job. A browser has no such
+ * hook. So: collect, let the destroy hooks run, collect again, then measure.
+ * Without the turn of the event loop this measured the harness's Map, which
+ * doubled from 117MB to 229MB at 4.25M events and failed every nightly (#224).
+ */
+async function heapUsed(): Promise<number> {
+  global.gc?.();
+  await yieldToEventLoop();
   global.gc?.();
   return process.memoryUsage().heapUsed;
 }
 
-test(`sustains ${EVENTS.toLocaleString()} events without growing`, { timeout: 120_000 }, () => {
+test(`sustains ${EVENTS.toLocaleString()} events without growing`, { timeout: 120_000 }, async (t) => {
+  assert.equal(typeof global.gc, 'function', 'run with --expose-gc: without it every sample includes garbage');
   resetForTests();
 
   const sensor = new Sensor({
@@ -37,6 +60,9 @@ test(`sustains ${EVENTS.toLocaleString()} events without growing`, { timeout: 12
     release: 'soak',
     // No flush: this isolates in-memory growth from network behavior. A sensor
     // that only stays bounded because something drains it is not bounded.
+    // Said explicitly: autoFlush defaults on, and its timer fires now that the
+    // loop yields, which would drain the counters between samples.
+    autoFlush: false,
     now: () => Date.now(),
   });
 
@@ -77,7 +103,10 @@ test(`sustains ${EVENTS.toLocaleString()} events without growing`, { timeout: 12
     if (sliceMs > BUDGET.maxTaskMs) overBudget++;
     if (sliceMs > maxSliceMs) maxSliceMs = sliceMs;
 
-    if (i % sampleEvery === 0) samples.push(heapUsed());
+    if (i % sampleEvery === 0) samples.push(await heapUsed());
+    // A real page returns to the event loop between events; a loop that never
+    // does keeps every async resource it created registered with the harness.
+    else if (i % YIELD_EVERY === 0) await yieldToEventLoop();
   }
 
   const stats = sensor.stats();
@@ -89,6 +118,9 @@ test(`sustains ${EVENTS.toLocaleString()} events without growing`, { timeout: 12
     `fingerprints ${stats.distinctFingerprints} > ${BUDGET.maxCountsPerFlush}`);
   assert.ok(stats.pendingWrites <= BUDGET.maxPendingVerifications,
     `pending writes ${stats.pendingWrites} > ${BUDGET.maxPendingVerifications}`);
+
+  // In the log on every run, so a nightly that passes still shows its shape.
+  t.diagnostic(`heap samples: ${samples.map((b) => (b / 1024 / 1024).toFixed(1)).join(', ')}MB`);
 
   // 2. No *unbounded* heap growth.
   //

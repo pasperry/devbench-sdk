@@ -11,7 +11,7 @@ import { CounterTable } from './counters.js';
 import { compute, type Frame } from './fingerprint.js';
 import { DEFAULT_REDACTION, fieldValue, newSessionSalt, redactText, redactUrl, type RedactionConfig } from './redact.js';
 import { ReadbackTracker } from './detect/readback.js';
-import { Transport } from './transport.js';
+import { PROTOCOL_VERSION, Transport } from './transport.js';
 import { parseDsn, warn } from './dsn.js';
 import { safe, safeVoid } from './safe.js';
 import type { CapturedSignal, HttpRecord, Identity, Intent, SignalKind } from './types.js';
@@ -97,6 +97,8 @@ export class Sensor {
    *  to these are the sensor's own and are never recorded (loop guard). */
   private readonly endpointKey: string;
   private readonly evidenceKeys: string[] = [];
+  /** URL prefixes (origin + path) that are the SDK's own, e.g. the chat API. */
+  private readonly ownPrefixes: string[] = [];
   private networkCaptures = 0;
   private consoleMuted = 0;
   /** Read by the capture modules; fixed for the life of the sensor. */
@@ -464,8 +466,20 @@ export class Sensor {
   isOwnRequest(url: string): boolean {
     return safe(() => {
       const key = bareUrl(url);
-      return key === this.endpointKey || this.evidenceKeys.indexOf(key) >= 0;
+      if (key === this.endpointKey || this.evidenceKeys.indexOf(key) >= 0) return true;
+      for (const p of this.ownPrefixes) if (key.indexOf(p) === 0) return true;
+      return false;
     }, true);
+  }
+
+  /**
+   * Marks every URL under `prefix` (origin + path) as the SDK's own, so
+   * capture never records it: the chat widget's calls to `<api>/v1/chat/`.
+   */
+  addOwnPrefix(prefix: string): void {
+    safeVoid(() => {
+      if (prefix && this.ownPrefixes.indexOf(prefix) < 0) this.ownPrefixes.push(prefix);
+    });
   }
 
   /**
@@ -535,7 +549,7 @@ export class Sensor {
    */
   evidenceBundle(fp: string): Record<string, unknown> {
     return {
-      v: 1,
+      v: PROTOCOL_VERSION,
       fp,
       // The session id, so the server can rebuild a trace key.
       //

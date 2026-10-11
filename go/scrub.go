@@ -21,37 +21,42 @@ import (
 // passes through here — it travels in its own field and never enters a
 // bundle.
 
-type scrubRule struct {
-	re   *regexp.Regexp
-	with string
+// A shape rule rewrites the whole text. Most are a regex and its
+// replacement; the card and phone rules are functions (scrub_numbers.go),
+// because their candidates need checks a regex cannot express.
+type scrubRule func(string) string
+
+func subRule(re *regexp.Regexp, with string) scrubRule {
+	return func(s string) string { return re.ReplaceAllString(s, with) }
 }
 
 // Most specific first; the order is load-bearing (see internal/scrub).
 var scrubRules = []scrubRule{
-	{regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`),
-		`<redacted:private-key>`},
-	{regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}\b`),
-		`<redacted:jwt>`},
-	{regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://)[^\s:/@]+:[^\s/@]+@`),
-		`${1}<redacted:credentials>@`},
-	{regexp.MustCompile(`(?i)\b(authorization|proxy-authorization)(\s*[:=]\s*)(?:\S+[ \t]+)?\S+`),
-		`${1}${2}<redacted:authorization>`},
-	{regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._\-=/+]{8,}`),
-		`${1} <redacted:token>`},
-	{regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), `<redacted:aws-key>`},
-	{regexp.MustCompile(`(?i)\b(password|passwd|pwd|secret|api[_\-]?key|access[_\-]?token|refresh[_\-]?token|client[_\-]?secret|private[_\-]?key|session[_\-]?id|csrf[_\-]?token)(\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)`),
-		`${1}${2}<redacted:secret>`},
-	{regexp.MustCompile(`\b[^\s<>@]+@[^\s<>@]+\.[A-Za-z]{2,}\b`), `<redacted:email>`},
-	{regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`), `<redacted:ssn>`},
-	{regexp.MustCompile(`\b(?:\d[ \-]*?){13,19}\b`), `<redacted:card>`},
-	{regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`), `<redacted:ip>`},
-	{regexp.MustCompile(`\+?\d[\d\s().\-]{7,}\d`), `<redacted:phone>`},
+	subRule(regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`),
+		`<redacted:private-key>`),
+	subRule(regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}\b`),
+		`<redacted:jwt>`),
+	subRule(regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://)[^\s:/@]+:[^\s/@]+@`),
+		`${1}<redacted:credentials>@`),
+	subRule(regexp.MustCompile(`(?i)\b(authorization|proxy-authorization)(\s*[:=]\s*)(?:\S+[ \t]+)?\S+`),
+		`${1}${2}<redacted:authorization>`),
+	subRule(regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._\-=/+]{8,}`),
+		`${1} <redacted:token>`),
+	subRule(regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), `<redacted:aws-key>`),
+	subRule(regexp.MustCompile(`(?i)\b(password|passwd|pwd|secret|api[_\-]?key|access[_\-]?token|refresh[_\-]?token|client[_\-]?secret|private[_\-]?key|session[_\-]?id|csrf[_\-]?token)(\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)`),
+		`${1}${2}<redacted:secret>`),
+	subRule(regexp.MustCompile(`\b[^\s<>@]+@[^\s<>@]+\.[A-Za-z]{2,}\b`), `<redacted:email>`),
+	subRule(regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`), `<redacted:ssn>`),
+	redactCards,
+	subRule(regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`), `<redacted:ip>`),
+	// Dates, UUIDs, ids and timestamps are not phones (#186).
+	redactPhones,
 }
 
 // scrubText is internal/scrub.Text: everything with a recognisable shape.
 func scrubText(s string) string {
-	for _, r := range scrubRules {
-		s = r.re.ReplaceAllString(s, r.with)
+	for _, apply := range scrubRules {
+		s = apply(s)
 	}
 	return s
 }

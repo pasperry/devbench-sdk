@@ -93,19 +93,18 @@ func (w *recoverWriter) Write(p []byte) (int, error) {
 	return w.ResponseWriter.Write(p)
 }
 
-func (w *recoverWriter) Flush() {
+func (w *recoverWriter) Flush() { _ = w.FlushError() }
+
+// FlushError is what http.ResponseController.Flush calls. Going through a
+// controller (not a type assertion) also reaches a writer that sits below
+// another wrapper offering only Unwrap.
+func (w *recoverWriter) FlushError() error {
 	w.started = true
-	if f, ok := w.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
+	return http.NewResponseController(w.ResponseWriter).Flush()
 }
 
 func (w *recoverWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	h, ok := w.ResponseWriter.(http.Hijacker)
-	if !ok {
-		return nil, nil, http.ErrNotSupported
-	}
-	conn, brw, err := h.Hijack()
+	conn, brw, err := http.NewResponseController(w.ResponseWriter).Hijack()
 	if err == nil {
 		// The connection is the handler's now; nothing may be written to it.
 		w.started = true

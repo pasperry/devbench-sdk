@@ -147,6 +147,31 @@ if err := deals.Save(ctx, d); err != nil {
 }
 ```
 
+## Chat widget identity
+
+The chat widget (off by default) is shown only to signed-in users your
+server vouches for. Sign the user with the tenant's widget secret
+(`dbws_…`, from the account page) and render the token into the page:
+
+```go
+token, err := devbench.WidgetIdentity(os.Getenv("DEVBENCH_WIDGET_SECRET"),
+    devbench.User{Email: u.Email, Account: d.ID},
+    devbench.WidgetRole(u.Role),            // optional: your role name, mapped in the widget settings
+    devbench.WidgetChat("report", "howto")) // optional: overrides the mapping; WidgetNoChat() denies
+if err == nil {
+    data.WidgetIdentity = token // <script ... data-widget-identity="{{.WidgetIdentity}}">
+}
+```
+
+Capabilities: `report`, `status`, `howto`, `feature_requests`, `handoff`.
+`WidgetChat()` with no names is an error (say `WidgetNoChat()`). An
+identity that can't be signed exactly (no secret, neither email nor
+account, a field over 255 characters, a control character such as a line
+break, an unknown capability)
+is an error wrapping `devbench.ErrWidgetIdentity`, never a truncated token;
+the first one is logged once. No token, no widget. Pages carrying a token
+are per-user: don't serve them from a shared cache.
+
 ## Server logs
 
 When Dev Bench triages a failure the browser saw, it asks for the server

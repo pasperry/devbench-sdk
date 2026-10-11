@@ -21,14 +21,14 @@ Gem::Specification.new do |spec|
     than no diagnostics.
   TEXT
   spec.homepage = 'https://github.com/pasperry/devbench-sdk'
-  spec.license  = 'LicenseRef-Proprietary'
+  spec.license  = 'MIT'
 
   spec.required_ruby_version = '>= 3.0'
 
   # Deliberately no runtime dependencies. This loads inside a customer's
   # application, and every dependency is a version conflict we could hand
   # them.
-  spec.files = Dir['lib/**/*.rb'] + ['README.md']
+  spec.files = Dir['lib/**/*.rb'] + ['README.md', 'LICENSE']
   spec.require_paths = ['lib']
 
   spec.metadata = {

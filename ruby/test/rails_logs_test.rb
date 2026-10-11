@@ -12,6 +12,8 @@
 
 require 'minitest/autorun'
 require 'logger'
+require 'base64'
+require 'openssl'
 require_relative 'ingest_helper'
 
 RAILS_LOGS_LOAD_ERROR = begin
@@ -25,9 +27,12 @@ end
 # The customer's environment: one value. Set before the gem and the app
 # load, as a deploy's environment is.
 RAILS_LOGS_INGEST = FakeIngest.new
-%w[DEVBENCH_DSN ADT_DSN DEVBENCH_SERVICE DEVBENCH_ENABLED DEVBENCH_RELEASE].each { |k| ENV.delete(k) }
+%w[DEVBENCH_DSN ADT_DSN DEVBENCH_SERVICE DEVBENCH_ENABLED DEVBENCH_RELEASE DEVBENCH_WIDGET_SECRET].each { |k| ENV.delete(k) }
 ENV['DEVBENCH_DSN'] = RAILS_LOGS_INGEST.pair_dsn('adt_client_logs', 'adt_server_logs')
 ENV['DEVBENCH_RELEASE'] = 'rel-42'
+# The chat widget's secret (Capability 6): signed-in pages carry a token.
+RAILS_LOGS_WIDGET_SECRET = 'dbws_k7x2m4q9r3t6v8w1y5z0a2b4c6d8e0f1g3h5j7k9m2n4p6q8'
+ENV['DEVBENCH_WIDGET_SECRET'] = RAILS_LOGS_WIDGET_SECRET
 
 require 'devbench'
 require_relative 'support/rails_logs_app' if RAILS_LOGS_LOAD_ERROR.nil?
@@ -143,8 +148,8 @@ end
 class RailsScriptTagTest < Minitest::Test
   include RailsLogsSupport
 
-  def page
-    status, headers, body = request('GET', '/page')
+  def page(path = '/page')
+    status, headers, body = request('GET', path)
     html = +''
     body.each { |part| html << part }
     assert_equal 200, status
@@ -164,6 +169,35 @@ class RailsScriptTagTest < Minitest::Test
   def test_the_secret_never_reaches_the_html
     html, = page
     refute_includes html, 'adt_server_logs'
+    html, = page('/signed_in_page')
+    refute_includes html, 'adt_server_logs'
+    refute_includes html, RAILS_LOGS_WIDGET_SECRET
+  end
+
+  # The chat widget (Capability 6): the user the controller set, with their
+  # role and chat permission, signed into the tag at render time, through
+  # the real middleware and ActionView. The signed-out page above (exact
+  # tag, no attribute) is the other half.
+  def test_a_signed_in_page_carries_the_signed_widget_identity
+    before = Time.now.to_i
+    html, = page('/signed_in_page')
+    token = html[/<script [^>]*data-widget-identity="([^"]+)"[^>]*><\/script>/, 1]
+    refute_nil token, html
+    prefix, payload, mac = token.split('.', -1)
+    assert_equal 'dbw1', prefix
+    assert_equal Base64.urlsafe_encode64(OpenSSL::HMAC.digest('SHA256', RAILS_LOGS_WIDGET_SECRET, "dbw1.#{payload}"),
+                                         padding: false), mac
+    issued, *rest = Base64.urlsafe_decode64(payload).split("\n", -1)
+    assert_includes (before..Time.now.to_i), Integer(issued, 10)
+    assert_equal ['pat@dealer.com', 'dealer-1182', 'dealer_staff', 'howto,report'], rest
+  end
+
+  # Servers reuse threads: the next request's signed-out page must not
+  # carry the previous request's user.
+  def test_the_next_signed_out_page_on_the_thread_carries_no_identity
+    page('/signed_in_page')
+    html, = page
+    refute_includes html, 'data-widget-identity'
   end
 end
 

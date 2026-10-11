@@ -6,10 +6,12 @@
 //   dist/types/            TypeScript declarations
 //   dist/adt.iife.js       legacy name of devbench.min.js, for existing installs
 //   dist/adt.esm.js        legacy ESM name
+//   dist/devbench-widget.min.js  the chat widget, loaded lazily by the SDK (+ an
+//                                unminified devbench-widget.js); never in the core
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { iife } from './bundle.mjs';
+import { iife, widget } from './bundle.mjs';
 
 rmSync('dist', { recursive: true, force: true });
 
@@ -20,6 +22,8 @@ await build({ ...iife, minify: false, outfile: 'dist/devbench.js' });
 await build({ ...iife, outfile: 'dist/adt.iife.js' });
 await build({ ...esm, outfile: 'dist/devbench.esm.js' });
 await build({ ...esm, minify: true, outfile: 'dist/adt.esm.js' });
+await build({ ...widget, outfile: 'dist/devbench-widget.min.js' });
+await build({ ...widget, minify: false, outfile: 'dist/devbench-widget.js' });
 
 execFileSync(
   process.execPath,
@@ -27,4 +31,4 @@ execFileSync(
   { stdio: 'inherit' },
 );
 
-console.log('built dist/devbench.{min.js,js,esm.js}, dist/types, and legacy dist/adt.{iife,esm}.js');
+console.log('built dist/devbench.{min.js,js,esm.js}, dist/devbench-widget.{min.js,js}, dist/types, and legacy dist/adt.{iife,esm}.js');

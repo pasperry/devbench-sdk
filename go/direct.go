@@ -476,7 +476,7 @@ func (d *directClient) flushCycle(ctx context.Context) error {
 	sort.Slice(counts, func(i, j int) bool { return counts[i].FP < counts[j].FP })
 
 	envelope := flushBody{
-		V: 1, Source: "server", Service: d.cfg.service, Release: d.cfg.release, SensorID: sensorID,
+		V: ProtocolVersion, Source: "server", Service: d.cfg.service, Release: d.cfg.release, SensorID: sensorID,
 	}
 	return d.flushBatches(ctx, win, splitCounts(envelope, counts))
 }
@@ -485,7 +485,7 @@ func (d *directClient) flushCycle(ctx context.Context) error {
 // then answers what the responses asked for. Caller holds flushMu.
 func (d *directClient) flushBatches(ctx context.Context, win *window, batches [][]flushCount) error {
 	envelope := flushBody{
-		V: 1, Source: "server", Service: d.cfg.service, Release: d.cfg.release, SensorID: sensorID,
+		V: ProtocolVersion, Source: "server", Service: d.cfg.service, Release: d.cfg.release, SensorID: sensorID,
 	}
 	dropped := int(d.dropped.Swap(0))
 	var askedLogs []string
@@ -638,7 +638,7 @@ func buildBundleWith(p *egressPolicy, fp, service string, det *detail) evidenceB
 		template = scrubText(text)
 	}
 	return evidenceBundle{
-		V: 1, FP: fp, Kind: det.kind,
+		V: ProtocolVersion, FP: fp, Kind: det.kind,
 		Template:  template,
 		Service:   service,
 		Exemplars: []string{egressLineWith(p, service, det.exemplar)},

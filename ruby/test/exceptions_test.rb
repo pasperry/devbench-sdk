@@ -87,7 +87,7 @@ class CaptureExceptionTest < Minitest::Test
     end
 
     msg = sidecar_message
-    assert_equal 1, msg['v']
+    assert_equal ADT::PROTOCOL_VERSION, msg['v']
     assert_equal 'exception', msg['kind']
     assert_equal 'explicit', msg['context']
     assert_equal true, msg['handled']
@@ -313,6 +313,7 @@ class MiddlewareExceptionTest < Minitest::Test
     assert_nil raised.cause
 
     msg = sidecar_message
+    assert_equal ADT::PROTOCOL_VERSION, msg['v']
     assert_equal 'exception', msg['kind']
     assert_equal 'request', msg['context']
     assert_equal false, msg['handled']

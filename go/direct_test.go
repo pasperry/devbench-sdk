@@ -56,7 +56,7 @@ func TestDirect_Phase1BodyCarriesTheSidecarsFingerprints(t *testing.T) {
 		t.Errorf("content-type = %q", fl.ContentType)
 	}
 	b := fl.Body
-	if b.V != 1 || b.Source != "server" || b.Service != "go-billing" || b.Release != "r42" {
+	if b.V != ProtocolVersion || b.Source != "server" || b.Service != "go-billing" || b.Release != "r42" {
 		t.Errorf("envelope = v%d source=%q service=%q release=%q", b.V, b.Source, b.Service, b.Release)
 	}
 	if b.SensorID == "" || b.SensorID != sensorID {
@@ -270,7 +270,7 @@ func TestDirect_EvidenceIsUploadedWhenAskedAndScrubbed(t *testing.T) {
 		t.Fatalf("bundle: %v\n%s", err, p.Raw)
 	}
 	fp := flushes[0].Body.Counts[0].FP
-	if bundle["v"] != float64(1) || bundle["fp"] != fp || bundle["kind"] != "error" || bundle["service"] != "billing" {
+	if bundle["v"] != float64(ProtocolVersion) || bundle["fp"] != fp || bundle["kind"] != "error" || bundle["service"] != "billing" {
 		t.Errorf("bundle header = %v", bundle)
 	}
 	if got := bundle["template"]; got != "*billing.ChargeError at POST /charges" {
