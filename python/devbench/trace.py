@@ -1,6 +1,6 @@
 """The correlation id that ties a user action together across every service.
 
-Wire form (docs/SERVER_SDK_SPEC.md, Capability 1)::
+Wire form (docs/server-sdk/trace-propagation.md, Capability 1)::
 
     x-adt-trace: v1/<session>/<intent>/<hop>
 

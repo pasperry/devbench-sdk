@@ -20,7 +20,7 @@ import { formatTrace, newId, TRACE_HEADER, type Trace } from './trace.js';
 export interface SensorOptions {
   /**
    * `https://<ingest key>@host[:port]`, from the key Dev Bench minted for this
-   * environment (SERVER_SDK_SPEC.md, "Dev Bench naming and configuration").
+   * environment (docs/server-sdk/configuration.md, "Dev Bench naming and configuration").
    * Replaces `endpoint` + `ingestKey`. An invalid DSN never throws: it logs
    * one console.warn and the sensor is inert (records and sends nothing).
    */
@@ -280,7 +280,7 @@ export class Sensor {
 
   /**
    * Sets who is using the page, or clears it with `null`
-   * (SERVER_SDK_SPEC.md, "Capability 5 — Identity").
+   * (docs/server-sdk/identity.md, "Capability 5 — Identity").
    *
    *   sensor.setUser({ email: 'pat@example.com', account: 'acct-1182' });
    *

@@ -23,7 +23,7 @@ export const BUDGET = {
   maxBeaconBytes: 8 * 1024,
   maxCountsPerFlush: 64,
   /** Distinct identities listed per count per flush; more only increment
-   *  `users_overflow` (SERVER_SDK_SPEC.md, "Phase 1 — counts"). */
+   *  `users_overflow` (docs/server-sdk/wire-protocol.md, "Phase 1 — counts"). */
   maxUsersPerCount: 20,
 
   /** Work slice: analysis runs in idle time and yields well inside a frame. */

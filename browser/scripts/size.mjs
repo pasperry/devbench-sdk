@@ -3,7 +3,7 @@
 // enforces is a number in a document.
 //
 // Two numbers: the core SDK (every page that installs Dev Bench) and the chat
-// widget (only pages whose user the chat API admits; SERVER_SDK_SPEC.md
+// widget (only pages whose user the chat API admits; docs/server-sdk/chat-widget.md
 // Capability 6). The widget must never end up inside the core.
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';

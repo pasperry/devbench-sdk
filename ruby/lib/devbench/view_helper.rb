@@ -12,7 +12,7 @@ module Devbench
   #
   # renders
   #
-  #   <script src="https://unpkg.com/devbench@0.7.0/dist/devbench.min.js"
+  #   <script src="https://unpkg.com/devbench@0.8.0/dist/devbench.min.js"
   #           data-dsn="https://<public>@<host>" data-release="<release>" defer></script>
   #
   # The DSN is the public part of DEVBENCH_DSN only (Devbench.browser_dsn),
@@ -23,7 +23,7 @@ module Devbench
   # CSP nonce (content_security_policy_nonce_generator), the tag carries it,
   # as Rails' own `javascript_include_tag nonce: true` does.
   #
-  # Chat widget (docs/SERVER_SDK_SPEC.md, Capability 6): when
+  # Chat widget (docs/server-sdk/chat-widget.md, Capability 6): when
   # DEVBENCH_WIDGET_SECRET is set and Devbench.set_user was called for this
   # request, the tag also carries data-widget-identity="<token>", the user
   # (and their role and chat permission) signed at render time. No secret, no

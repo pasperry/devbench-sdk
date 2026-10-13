@@ -35,6 +35,13 @@ type requestScope struct {
 	req  atomic.Pointer[http.Request]
 	user atomic.Pointer[User]
 
+	// exception: an `exception` was reported during this request (any
+	// context), so a 5xx is not reported again as a failed request.
+	exception atomic.Bool
+	// muxRoute is the ServeMux pattern found by asking the mux itself, for
+	// toolchains without Request.Pattern (pattern_legacy.go); nil otherwise.
+	muxRoute atomic.Pointer[string]
+
 	mu       sync.Mutex
 	reported []error // errors already sent as exceptions in this request
 }
@@ -67,6 +74,36 @@ func (s *requestScope) symbol() string {
 		return truncateRunes(routePattern(r), maxSymbol)
 	}
 	return ""
+}
+
+// route is the request's route for request signals: the matched pattern
+// with any method prefix removed ("/deals/{id}"), or "" when there is none
+// — never the raw path.
+func (s *requestScope) route() string {
+	if s == nil {
+		return ""
+	}
+	if r := s.req.Load(); r != nil {
+		if p := routePattern(r); p != "" {
+			return routeOfPattern(p)
+		}
+	}
+	if p := s.muxRoute.Load(); p != nil {
+		return routeOfPattern(*p)
+	}
+	return ""
+}
+
+// noteMux records, on toolchains without Request.Pattern, the pattern next
+// would match when next is a *http.ServeMux.
+func noteMux(r *http.Request, next http.Handler) {
+	s := scopeFrom(r.Context())
+	if s == nil {
+		return
+	}
+	if p := muxPattern(next, r); p != "" {
+		s.muxRoute.Store(&p)
+	}
 }
 
 // reportPanic sends a panic recovered by Middleware as an exception. It is
@@ -132,6 +169,9 @@ func CaptureException(ctx context.Context, err error) {
 	scope := scopeFrom(ctx)
 	if !scope.markReported(err) {
 		return
+	}
+	if scope != nil {
+		scope.exception.Store(true)
 	}
 
 	send(message{

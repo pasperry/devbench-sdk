@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// User is who was affected by a failure (SERVER_SDK_SPEC capability 5) —
+// User is who was affected by a failure (docs/server-sdk/identity.md capability 5) —
 // what Sentry's setUser records.
 //
 // Identity travels in its own `user` field on every report and nowhere else:

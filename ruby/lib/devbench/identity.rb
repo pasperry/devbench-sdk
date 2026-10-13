@@ -3,7 +3,7 @@
 require_relative 'current'
 
 module Devbench
-  # Who was affected (docs/SERVER_SDK_SPEC.md, Capability 5).
+  # Who was affected (docs/server-sdk/identity.md, Capability 5).
   #
   # Identity travels in its own field of every control message and nowhere
   # else: never in a message, a symbol or a log line, so it can never move a
@@ -45,7 +45,7 @@ module Devbench
   # Each field is optional. Calling again replaces the whole identity, and
   # calling with neither clears it. Never raises.
   #
-  # role: and chat: are for the chat widget only (docs/SERVER_SDK_SPEC.md,
+  # role: and chat: are for the chat widget only (docs/server-sdk/chat-widget.md,
   # Capability 6): devbench_script_tag signs them, with the email and
   # account, into the widget's identity token when DEVBENCH_WIDGET_SECRET is
   # set. They are never sent with sensor data. role is the app's own role

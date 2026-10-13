@@ -13,6 +13,8 @@ What it does:
 * accepts and forwards the correlation id     (the middlewares, trace_headers)
 * reports unhandled exceptions                (the middlewares, Celery hooks,
                                                capture_exception)
+* reports 5xx answered without an exception,
+  requests over 3 s and 429 spikes            (the middlewares; reqsignal)
 * reports handled failures                    (report_handled)
 * records who was affected                    (set_user)
 * keeps recent log lines per trace            (capture_logs; a logging handler)
@@ -29,12 +31,12 @@ from .config import DSN, Configuration, InvalidDSN
 from .identity import set_user
 from .trace import HEADER as TRACE_HEADER
 from .trace import Trace
-from .version import PROTOCOL_VERSION, VERSION
+from .version import PROTOCOL_VERSION, SDK_NAME, VERSION
 
 __version__ = VERSION
 
 __all__ = [
-    "PROTOCOL_VERSION", "VERSION", "DSN", "Configuration", "InvalidDSN", "Trace", "TRACE_HEADER",
+    "PROTOCOL_VERSION", "VERSION", "SDK_NAME", "DSN", "Configuration", "InvalidDSN", "Trace", "TRACE_HEADER",
     "configure", "enabled", "set_user", "capture_exception", "report_handled", "ignore_exceptions",
     "trace_headers", "current_trace", "capture_logs", "flush", "test",
 ]

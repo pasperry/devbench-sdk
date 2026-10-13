@@ -11,12 +11,13 @@
 import { BUDGET } from './budget.js';
 import type { Count } from './counters.js';
 import { readSessionToken, SESSION_HEADER } from './trace.js';
+import { SDK_NAME, VERSION } from './version.js';
 
 /**
  * The wire format this SDK speaks: the `v` every payload carries (the flush
  * body and the evidence bundle). Not the release VERSION: it changes only for
  * a breaking wire change, and ingest tells formats apart by it. It must equal
- * `current` in testdata/protocol_vectors.json (docs/SERVER_SDK_SPEC.md,
+ * `current` in testdata/protocol_vectors.json (docs/server-sdk/protocol-version.md,
  * "Protocol version"); send it, never a literal. Exported from the entry point.
  */
 export const PROTOCOL_VERSION = 1;
@@ -39,6 +40,8 @@ export interface FlushRequest {
   source: 'client';
   release: string;
   sensor_id: string;
+  /** Which SDK sent this, on every beacon (docs/server-sdk/wire-protocol.md; #307). */
+  sdk: { name: string; version: string };
   counts: Count[];
   /** Counters refused because the table was full; reported so loss is visible. */
   overflowed?: number;
@@ -165,6 +168,7 @@ export class Transport {
       source: 'client',
       release: this.opts.release,
       sensor_id: this.opts.sensorId,
+      sdk: { name: SDK_NAME, version: VERSION },
       counts,
     };
     if (out.length === 0 && extra.overflowed) body.overflowed = extra.overflowed;

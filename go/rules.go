@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Learned redaction rules (SERVER_SDK_SPEC "In-process log capture": "applied
+// Learned redaction rules (docs/server-sdk/configuration.md "In-process log capture": "applied
 // to delivered lines exactly as the sidecar applies them").
 //
 // Ingest sends the tenant's full current rule set on every flush response to

@@ -7,7 +7,7 @@ import (
 )
 
 // The protocol version this SDK declares is the one every SDK and ingest
-// agree on (docs/SERVER_SDK_SPEC.md, "Protocol version"). The wire tests
+// agree on (docs/server-sdk/protocol-version.md, "Protocol version"). The wire tests
 // (capture_test, panic_test, report_handled_test, direct_test) assert that
 // each payload carries ProtocolVersion as `v`; this holds the constant to
 // the shared vectors, so an SDK speaking a version ingest refuses cannot pass.

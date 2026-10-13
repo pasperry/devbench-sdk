@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, MutableMapping, Optional
 
-from . import _core, _integration, context
+from . import _core, _integration, _requests, context
 from .trace import Trace
 
 Scope = MutableMapping[str, Any]
@@ -38,22 +38,41 @@ class DevbenchMiddleware:
         if scope.get("type") != "http" or not _core.enabled():
             await self.app(scope, receive, send)
             return
+        # Inside another Dev Bench middleware: that one scopes, reports and
+        # observes this request.
+        if _requests.observing():
+            await self.app(scope, receive, send)
+            return
         trace = _parse(scope)
+        answered: list = []
 
         async def send_wrapper(message: Message) -> None:
             if message.get("type") == "http.response.start":
+                try:
+                    if not answered:
+                        answered[:] = [message.get("status"), _requests.header(message.get("headers"), "content-type")]
+                except Exception:
+                    pass
                 try:
                     message = _with_handled(message)
                 except Exception:
                     pass
             await send(message)
 
-        with context.scoped(trace):
+        with context.scoped(trace) as request_scope:
+            request = _requests.begin(request_scope, scope.get("method"))
             try:
                 await self.app(scope, receive, send_wrapper)
             except Exception as error:
                 _integration.report_request_error(error, _symbol(scope))
                 raise
+            if request is not None:
+                # An app that returned without answering: the server sends
+                # 500 (uvicorn, hypercorn), and nothing was reported.
+                status = answered[0] if answered else 500
+                content_type = answered[1] if answered else None
+                request.route = _route(scope)
+                _requests.finish(request, status, _requests.event_stream(content_type))
 
 
 def _parse(scope: Scope) -> Optional[Trace]:
@@ -64,6 +83,25 @@ def _parse(scope: Scope) -> Optional[Trace]:
     except Exception:
         pass
     return None
+
+
+def _route(scope: Scope) -> Optional[str]:
+    """The matched route's pattern: ``scope["route"].path`` (FastAPI, and
+    Starlette since it records the route), else the route whose endpoint the
+    router put in the scope. None (reported as "*") when nothing matched."""
+    try:
+        route = scope.get("route")
+        path = getattr(route, "path", None) if route is not None else None
+        if not isinstance(path, str):
+            endpoint, router = scope.get("endpoint"), scope.get("router")
+            if endpoint is not None and router is not None:
+                for candidate in getattr(router, "routes", None) or ():
+                    if getattr(candidate, "endpoint", None) is endpoint:
+                        path = getattr(candidate, "path", None)
+                        break
+        return path if isinstance(path, str) else None
+    except Exception:
+        return None
 
 
 def _symbol(scope: Scope) -> Optional[str]:

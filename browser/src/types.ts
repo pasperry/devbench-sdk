@@ -45,7 +45,7 @@ export interface CapturedSignal {
 }
 
 /**
- * Who was affected (SERVER_SDK_SPEC.md, "Capability 5 — Identity").
+ * Who was affected (docs/server-sdk/identity.md, "Capability 5 — Identity").
  *
  * Normalized by `Sensor.setUser` before it is held. Travels in its own field
  * on a count and nowhere else: never in a fingerprint, a message, or evidence.

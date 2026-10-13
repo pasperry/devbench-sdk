@@ -1,4 +1,4 @@
-"""Who was affected (docs/SERVER_SDK_SPEC.md, Capability 5).
+"""Who was affected (docs/server-sdk/identity.md, Capability 5).
 
 Identity travels in its own field and nowhere else: never in a message, a
 symbol or a log line, so it can never move a fingerprint.

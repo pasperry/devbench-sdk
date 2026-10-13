@@ -75,7 +75,7 @@ export interface StandIn {
 
 const b64u = (b: Buffer): string => b.toString('base64url');
 
-/** Signs per SERVER_SDK_SPEC.md Capability 6 (checked against the shared vectors in the tests). */
+/** Signs per docs/server-sdk/chat-widget.md Capability 6 (checked against the shared vectors in the tests). */
 export function signToken(
   user: { email?: string; account?: string; role?: string; chat?: string },
   issuedAt = Math.floor(Date.now() / 1000),

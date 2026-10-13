@@ -4,7 +4,7 @@ require 'minitest/autorun'
 require 'adt'
 require_relative 'sidecar_helper'
 
-# Unhandled-exception capture in plain Ruby (docs/SERVER_SDK_SPEC.md,
+# Unhandled-exception capture in plain Ruby (docs/server-sdk/unhandled-failures.md,
 # Capability 2). The Rails hooks are in test/rails_test.rb.
 
 # Stand-in for a Rails constant on the default skip list: a real class with

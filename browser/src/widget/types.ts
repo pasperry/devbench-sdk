@@ -1,6 +1,6 @@
 /**
  * What the core SDK's loader hands the lazily loaded chat widget bundle
- * (SERVER_SDK_SPEC.md, "Capability 6 — Chat widget" › Loading; the routes are
+ * (docs/server-sdk/chat-widget.md, "Capability 6 — Chat widget" › Loading; the routes are
  * docs/CHAT_API.md). Shared by both builds; types only, so nothing here lands
  * in either bundle.
  */

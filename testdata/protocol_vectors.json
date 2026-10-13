@@ -8,9 +8,66 @@
     "400 \"unsupported version\".",
     "",
     "Pinned to internal/protocol by internal/protocol/protocol_test.go. Edit both",
-    "together, and only for a breaking wire change."
+    "together, and only for a breaking wire change.",
+    "",
+    "`sdk` (#291; docs/SERVER_SDK_SPEC.md, \"Phase 1 — the SDK's name and version\"):",
+    "the optional `sdk: {name, version}` every flush may carry. `names` maps each",
+    "SDK's `name` to its directory in this repository: every SDK sends exactly its",
+    "own key, and its tests check the name it sends is the key for its directory.",
+    "A new SDK adds its name here and in the spec. `name_pattern` and",
+    "`version_pattern` are the rules ingest applies; `valid` are `sdk` values ingest",
+    "stores as sent; `invalid` are values ingest drops (stores \"\" for both, as if",
+    "absent) while accepting the flush exactly as without them. Never a 400.",
+    "The patterns match the whole value: Ruby \\A...\\z, Python re.fullmatch, never",
+    "line anchors (the newline cases below).",
+    "Checked for consistency by internal/protocol/protocol_test.go; ingest (#295)",
+    "and every SDK (#307-#311) test against this section."
   ],
   "current": 1,
   "supported": [1],
-  "refused": [0, 2, -1]
+  "refused": [0, 2, -1],
+  "sdk": {
+    "names": {
+      "browser": "sdk/client",
+      "dotnet": "sdk/server/dotnet",
+      "go": "sdk/server/go",
+      "python": "sdk/server/python",
+      "ruby": "sdk/server/ruby"
+    },
+    "name_pattern": "^[a-z0-9][a-z0-9.-]{0,31}$",
+    "version_pattern": "^[0-9A-Za-z.+-]{1,64}$",
+    "valid": [
+      {"name": "ruby", "version": "0.7.0"},
+      {"name": "browser", "version": "0.7.0"},
+      {"name": "dotnet", "version": "0.1.0-beta.1+build.5"},
+      {"name": "go", "version": "1"},
+      {"name": "a", "version": "v"},
+      {"name": "abcdefghijklmnopqrstuvwxyz012345", "version": "0123456789012345678901234567890123456789012345678901234567890123"},
+      {"name": "python", "version": "0.1.0", "runtime": "cpython-3.12"}
+    ],
+    "invalid": [
+      {"why": "name has an upper-case letter", "sdk": {"name": "Ruby", "version": "0.7.0"}},
+      {"why": "name is empty", "sdk": {"name": "", "version": "0.7.0"}},
+      {"why": "name is 33 characters", "sdk": {"name": "abcdefghijklmnopqrstuvwxyz0123456", "version": "0.7.0"}},
+      {"why": "name starts with a dot", "sdk": {"name": ".ruby", "version": "0.7.0"}},
+      {"why": "name starts with a hyphen", "sdk": {"name": "-go", "version": "0.7.0"}},
+      {"why": "name has a space", "sdk": {"name": "dot net", "version": "0.1.0"}},
+      {"why": "name has a slash", "sdk": {"name": "ruby/rails", "version": "0.7.0"}},
+      {"why": "name is a number", "sdk": {"name": 5, "version": "0.7.0"}},
+      {"why": "name is missing", "sdk": {"version": "0.7.0"}},
+      {"why": "version is empty", "sdk": {"name": "ruby", "version": ""}},
+      {"why": "version is 65 characters", "sdk": {"name": "ruby", "version": "01234567890123456789012345678901234567890123456789012345678901234"}},
+      {"why": "version has a space", "sdk": {"name": "ruby", "version": "0.7.0 beta"}},
+      {"why": "version has a slash", "sdk": {"name": "go", "version": "go/v0.7.0"}},
+      {"why": "version is a number", "sdk": {"name": "go", "version": 7}},
+      {"why": "version is missing", "sdk": {"name": "go"}},
+      {"why": "name has a non-ASCII letter", "sdk": {"name": "rubÿ", "version": "0.7.0"}},
+      {"why": "name ends with a newline (a $ that matches before a final newline)", "sdk": {"name": "ruby\n", "version": "0.7.0"}},
+      {"why": "name has a second line (a line-anchored ^...$)", "sdk": {"name": "Not Valid\nruby", "version": "0.7.0"}},
+      {"why": "version ends with a newline", "sdk": {"name": "ruby", "version": "0.7.0\n"}},
+      {"why": "sdk is a string", "sdk": "ruby 0.7.0"},
+      {"why": "sdk is an array", "sdk": ["ruby", "0.7.0"]},
+      {"why": "sdk is a number", "sdk": 1}
+    ]
+  }
 }

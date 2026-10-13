@@ -18,7 +18,7 @@ from . import context
 from .fingerprint import utf8
 from .version import PROTOCOL_VERSION
 
-# docs/SERVER_SDK_SPEC.md, "Control socket — v1".
+# docs/server-sdk/control-socket.md, "Control socket — v1".
 MAX_MESSAGE = 2000
 MAX_HANDLED_MESSAGE = 500
 MAX_FRAMES = 50
@@ -116,7 +116,45 @@ def capture(error: Any, context_name: str, handled: bool, symbol: Optional[str] 
         # Marked before sending, so a second hook reached while this one is
         # still sending does not send it again.
         _mark(error)
+        _mark_request()
         _emit(exception_payload(error, context_name, handled, symbol))
+    except Exception:
+        pass
+
+
+def _mark_request() -> None:
+    """An exception reported during a request is that request's report: a
+    5xx it ends with is not also ``failed`` (Capability 2b). A handled
+    failure does not mark it."""
+    try:
+        scope = context.current()
+        request = scope.request if scope is not None else None
+        if request is not None:
+            request.exception_reported = True
+    except Exception:
+        pass
+
+
+def request_payload(signal: str, method: str, route: str, status: int, duration_ms: int) -> dict:
+    """The ``request`` message (docs/server-sdk/control-socket.md) for a
+    ``failed`` or ``slow`` request, with the request's trace and user."""
+    payload = {
+        "v": PROTOCOL_VERSION,
+        "kind": "request",
+        "signal": signal,
+        "method": method,
+        "route": route,
+        "status": int(status),
+        "duration_ms": int(duration_ms),
+        "trace": _safely(lambda: _trace_text()),
+        "user": _safely(context.current_user),
+    }
+    return {k: v for k, v in payload.items() if v is not None}
+
+
+def report_request(signal: str, method: str, route: str, status: int, duration_ms: int) -> None:
+    try:
+        _emit(request_payload(signal, method, route, status, duration_ms))
     except Exception:
         pass
 

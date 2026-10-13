@@ -9,7 +9,7 @@ require_relative 'ingest_helper'
 require_relative 'sidecar_helper'
 
 # Direct mode against a real HTTP server (FakeIngest): what is asserted is
-# what arrived over the socket. docs/SERVER_SDK_SPEC.md, "Direct mode".
+# what arrived over the socket. docs/server-sdk/transports.md, "Direct mode".
 module DirectSetup
   SERVICE = 'rails-api'
 

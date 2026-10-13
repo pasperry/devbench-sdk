@@ -11,7 +11,7 @@ import (
 )
 
 // The control-socket reporter: the sidecar transport, used when no DSN is
-// configured (SERVER_SDK_SPEC "Control socket — v1"; direct.go is the other).
+// configured (docs/server-sdk/control-socket.md "Control socket — v1"; direct.go is the other).
 //
 // In this mode the SDK sends nothing over the network. It writes
 // line-delimited JSON to the sidecar's unix socket and the sidecar does the
@@ -92,6 +92,15 @@ type message struct {
 	Frames  []Frame `json:"frames,omitempty"`
 	Trace   string  `json:"trace,omitempty"`
 	User    *User   `json:"user,omitempty"`
+
+	// The `request` message (Capability 2b).
+	Signal     string `json:"signal,omitempty"`
+	Method     string `json:"method,omitempty"`
+	Route      string `json:"route,omitempty"`
+	Status     int    `json:"status,omitempty"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
+	Count      int64  `json:"count,omitempty"`
+	Total      int64  `json:"total,omitempty"`
 }
 
 // ReporterStats counts what happened to reports since the process started.

@@ -14,6 +14,13 @@ import (
 // no (or a malformed) x-adt-trace header has no trace and nothing is kept
 // for it — no failure Dev Bench triages can ever ask for its lines.
 //
+// Once the handler has returned (without panicking), the request is
+// classified as docs/server-sdk/failed-and-slow-requests.md (Capability 2b) says: a 5xx with no exception
+// reported during the request is a `failed` request, one that took more
+// than 3 s (not streaming) a `slow` one, and a route's 429s feed the
+// per-process spike rule. The route is the matched pattern without its
+// method ("/deals/{id}"), never the raw path; "*" when none matched.
+//
 // It never rejects a request and never alters the response. A diagnostics
 // middleware that can fail a request is worse than no diagnostics.
 //
@@ -32,18 +39,40 @@ import (
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+		// An inner Middleware (the gin adapter's, under an outer one) shares
+		// the outer request's scope, so the request is observed once and an
+		// exception captured anywhere inside counts for it.
+		outer := scopeFrom(ctx) == nil
 		if trace, ok := TraceFromRequest(r); ok {
 			ctx = WithTrace(ctx, trace)
 		}
-		ctx = context.WithValue(ctx, scopeKey{}, &requestScope{})
+		scope := scopeFrom(ctx)
+		if outer {
+			scope = &requestScope{}
+			ctx = context.WithValue(ctx, scopeKey{}, scope)
+		}
 		r = r.WithContext(ctx)
 		noteRequest(r)
+		noteMux(r, next)
+
+		// Request signals (Capability 2b): only the outermost Middleware
+		// observes, and nothing at all with reporting off.
+		var sw *statusWriter
+		if outer && activeConfig().mode != modeOff {
+			sw = &statusWriter{ResponseWriter: w}
+			w = sw
+		}
+		start := requestClock()
 
 		defer func() {
 			v := recover()
 			if v == nil {
 				// Since Go 1.21 panic(nil) recovers as *runtime.PanicNilError,
-				// so nil here means there was no panic.
+				// so nil here means there was no panic. A request that raised
+				// out of here is not observed: the exception is its report.
+				if sw != nil {
+					observeRequest(ctx, scope, sw, r, start, requestClock())
+				}
 				return
 			}
 			if v != any(http.ErrAbortHandler) {

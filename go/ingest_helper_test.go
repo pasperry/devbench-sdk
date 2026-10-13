@@ -24,6 +24,7 @@ type gotFlush struct {
 	Key         string
 	ContentType string
 	Size        int
+	Raw         []byte // the body exactly as it arrived
 	Body        wireFlush
 }
 
@@ -42,7 +43,11 @@ type wireFlush struct {
 	Service  string `json:"service"`
 	Release  string `json:"release"`
 	SensorID string `json:"sensor_id"`
-	Counts   []struct {
+	SDK      *struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	} `json:"sdk"`
+	Counts []struct {
 		FP     string         `json:"fp"`
 		N      int64          `json:"n"`
 		First  int64          `json:"first"`
@@ -197,7 +202,7 @@ func (f *fakeIngest) flush(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.flushes = append(f.flushes, gotFlush{
 		Key: r.Header.Get("X-ADT-Key"), ContentType: r.Header.Get("content-type"),
-		Size: len(raw), Body: body,
+		Size: len(raw), Raw: raw, Body: body,
 	})
 	if !f.logsOnlyOnPoll || len(body.Counts) == 0 {
 		for _, k := range f.needLogs {

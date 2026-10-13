@@ -4,8 +4,9 @@ require_relative 'config'
 require_relative 'sidecar_transport'
 require_relative 'direct'
 require_relative 'logs'
+require_relative 'request_signals'
 
-# Configuration and transport selection (docs/SERVER_SDK_SPEC.md,
+# Configuration and transport selection (docs/server-sdk/transports.md,
 # "Transports: direct (default) or sidecar (optional)").
 #
 # Exactly one transport per process, decided at the first report:
@@ -124,6 +125,9 @@ module Devbench
     # seconds. A no-op in sidecar mode. Returns true when nothing is left
     # unsent. Never raises.
     def flush!(timeout: 5)
+      # Closes a 429 spike window the clock has left, in either transport
+      # (sidecar mode has no flush thread of its own to do it).
+      RequestSignals.tick!
       transport.flush!(timeout: timeout) ? true : false
     rescue StandardError, SystemStackError
       false
@@ -190,6 +194,10 @@ module Devbench
     private
 
     def reset_transport!
+      # A replaced configuration ends the 429 spike window, as process exit
+      # does: evaluated as it stands and reported under the transport that
+      # saw its requests, before that transport's last flush.
+      RequestSignals.finish!(@transport)
       old = TRANSPORT_LOCK.synchronize do
         previous = @transport
         @transport = nil

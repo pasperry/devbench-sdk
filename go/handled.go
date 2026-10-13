@@ -124,6 +124,7 @@ func Handled(next http.Handler) http.Handler {
 		// The mux below records its route pattern on this copy, which is
 		// the one Middleware must read if the request panics.
 		noteRequest(r)
+		noteMux(r, next)
 		next.ServeHTTP(rw, r)
 
 		// A handler that never wrote anything still produces a 200 from

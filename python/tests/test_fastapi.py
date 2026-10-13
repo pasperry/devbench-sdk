@@ -4,12 +4,17 @@ uvicorn over real HTTP: async and sync (thread-pool) endpoints."""
 from __future__ import annotations
 
 import logging
+import time
 import unittest
+from typing import Any
 
 import devbench
 from devbench import _core
 
+from devbench import _requests, reqsignal
+
 from .helpers import FakeIngest, fresh, http, require, serve_asgi
+from .request_cases import CLOCK, USER, RequestSignalCases, install_clocks, restore_clocks
 
 try:  # module level: FastAPI resolves endpoint annotations in the module
     from fastapi import FastAPI, HTTPException, Request
@@ -113,6 +118,156 @@ class FastAPITest(unittest.TestCase):
         self.assertEqual("x-adt-handled", headers.get("access-control-expose-headers"))
         _, untraced, _ = http("GET", self.base + "/handled")
         self.assertNotIn("x-adt-handled", untraced)
+
+
+class FastAPIRequestSignalsTest(RequestSignalCases, unittest.TestCase):
+    routes = {"fail": "/fail/{order}", "boom": "/boom", "captured": "/captured", "handled": "/handled",
+              "slow": "/slow/{ms}", "stream-fail": "/stream-fail", "real-slow": "/real-slow", "limited": "/limited"}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        require("fastapi", unittest.TestCase())
+        require("uvicorn", unittest.TestCase())
+        from fastapi.responses import PlainTextResponse
+
+        from devbench.fastapi import DevbenchMiddleware
+
+        cls.ingest = FakeIngest()
+        fresh(cls.ingest.dsn(), flush_interval=3600)
+        app = FastAPI()
+
+        @app.get("/fail/{order}")
+        async def fail(order: int) -> Any:
+            devbench.set_user(**USER)
+            return PlainTextResponse("inventory unavailable", status_code=503)
+
+        @app.get("/unavailable")
+        async def unavailable() -> Any:
+            raise HTTPException(status_code=503)
+
+        @app.get("/boom")
+        async def boom() -> Any:
+            raise PaymentDeclined("boom")
+
+        @app.get("/captured")
+        async def captured() -> Any:
+            devbench.capture_exception(ValueError("upstream refused"))
+            return PlainTextResponse("bad gateway", status_code=502)
+
+        @app.get("/handled")
+        def handled() -> Any:  # sync: runs in the thread pool
+            devbench.report_handled(ValueError("dup"), symbol="api.signals.handled")
+            return PlainTextResponse("unavailable", status_code=503)
+
+        @app.get("/slow/{ms}")
+        def slow(ms: int) -> Any:
+            devbench.set_user(**USER)
+            CLOCK.advance_ms(ms)
+            return {"ok": True}
+
+        @app.get("/slow-captured")
+        async def slow_captured() -> Any:
+            devbench.capture_exception(ValueError("cache miss"))
+            CLOCK.advance_ms(4000)
+            return {"ok": True}
+
+        @app.get("/stream")
+        async def stream() -> Any:
+            CLOCK.advance_ms(60000)
+            return PlainTextResponse("data: x\n\n", media_type="text/event-stream")
+
+        @app.get("/stream-fail")
+        async def stream_fail() -> Any:
+            return PlainTextResponse("data: x\n\n", status_code=503, media_type="text/event-stream")
+
+        @app.get("/limited")
+        async def limited() -> Any:
+            devbench.set_user(**USER)
+            return PlainTextResponse("slow down", status_code=429)
+
+        @app.get("/real-slow")
+        def real_slow() -> Any:
+            time.sleep(3.1)
+            return {"ok": True}
+
+        app.add_middleware(DevbenchMiddleware)
+        cls.base, cls.stop = serve_asgi(app)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        restore_clocks()
+        cls.stop()
+        cls.ingest.close()
+        _core.reset()
+
+    def setUp(self) -> None:
+        self.reset_signals()
+
+    def test_an_http_exception_with_a_5xx_is_failed(self) -> None:
+        self.assertEqual(503, self.get("/unavailable")[0])
+        entry = self.only(self.flushed())
+        self.assertEqual(self.fp("failed", "/unavailable", 503), entry["fp"])
+
+
+class StarletteRequestSignalsTest(unittest.TestCase):
+    """Plain Starlette: the route is the matched Route's path on every
+    supported Starlette (newer ones record it in the scope, older ones only
+    the endpoint); nothing matched is "*"."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        require("starlette", unittest.TestCase())
+        require("uvicorn", unittest.TestCase())
+        from starlette.applications import Starlette
+        from starlette.middleware import Middleware
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+
+        from devbench.asgi import DevbenchMiddleware
+
+        async def fail(request: Any) -> Any:
+            return PlainTextResponse("no", status_code=500)
+
+        async def slow(request: Any) -> Any:
+            CLOCK.advance_ms(3500)
+            return PlainTextResponse("ok")
+
+        async def not_found(request: Any, exc: Any) -> Any:
+            CLOCK.advance_ms(4000)
+            return PlainTextResponse("missing", status_code=404)
+
+        cls.ingest = FakeIngest()
+        fresh(cls.ingest.dsn(), flush_interval=3600)
+        app = Starlette(routes=[Route("/orders/{id:int}/fail", fail), Route("/slow", slow)],
+                        middleware=[Middleware(DevbenchMiddleware)], exception_handlers={404: not_found})
+        cls.base, cls.stop = serve_asgi(app)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        restore_clocks()
+        cls.stop()
+        cls.ingest.close()
+        _core.reset()
+
+    def setUp(self) -> None:
+        install_clocks()
+        devbench.flush()
+        with self.ingest.lock:
+            self.ingest.requests.clear()
+
+    def fp(self, signal: str, route: str, status: int) -> Any:
+        return reqsignal.build(signal, "GET", route, status).fingerprint(_core.config().resolved_service())
+
+    def test_the_route_is_the_pattern_and_unmatched_is_star(self) -> None:
+        before = _requests.finished()
+        self.assertEqual(500, http("GET", self.base + "/orders/77/fail")[0])
+        self.assertEqual(404, http("GET", self.base + "/nowhere/123")[0])
+        self.assertTrue(self.ingest.wait_for(lambda: _requests.finished() >= before + 2))
+        self.assertTrue(devbench.flush())
+        got = sorted((c["fp"], c["kind"]) for c in self.ingest.counts())
+        want = sorted([(self.fp("failed", "/orders/{id:int}/fail", 500), "error"),
+                       (self.fp("slow", "*", 404), "degradation")])
+        self.assertEqual(want, got)
 
 
 if __name__ == "__main__":

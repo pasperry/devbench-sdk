@@ -3,10 +3,13 @@
 require_relative 'trace'
 require_relative 'current'
 require_relative 'reporter'
+require_relative 'request_signals'
 
 module Devbench
   # Rack middleware: accepts the correlation id and makes it available for the
-  # duration of the request, and reports exceptions that escape the app.
+  # duration of the request, reports exceptions that escape the app, and
+  # reports what a request does without raising (Capability 2b: a 5xx with
+  # no exception, a request over 3 s, a route's 429 spike; RequestSignals).
   #
   # Never rejects a request, never alters the response body, and never raises
   # anything of its own. An exception from the application is reported and
@@ -19,6 +22,10 @@ module Devbench
   class Middleware
     HANDLED_HEADER = 'x-adt-handled'
     EXPOSE_HEADER = 'Access-Control-Expose-Headers'
+    # Set while the outermost instance observes a request, so a second
+    # instance in the stack (an app that inserted it twice, an engine's own)
+    # does not count the request twice.
+    OBSERVING_KEY = :__adt_observing_request
 
     def initialize(app)
       @app = app
@@ -34,23 +41,31 @@ module Devbench
         nil
       end
 
+      observing = Thread.current[OBSERVING_KEY] != true
+      started = observing ? RequestSignals.clock.monotonic_ms : nil
+
       # Scoped even without a trace: identity set during this request must
       # end with it, and a thread's next request must not inherit it.
       status, headers, body = Current.with(trace) do
+        Thread.current[OBSERVING_KEY] = true if observing
         result = begin
           @app.call(env)
         rescue Exception => e # rubocop:disable Lint/RescueException
           # Reported inside the scope so the report carries this request's
           # trace and user. capture never raises; if it somehow did, the
           # application's exception would be lost, which is the one outcome
-          # this must not have.
+          # this must not have. A request that raised is not evaluated as a
+          # request signal: the exception is its report.
           report(e, env)
           raise e
+        ensure
+          Thread.current[OBSERVING_KEY] = nil if observing
         end
 
         # Rails' ShowExceptions turns an exception into a 500 page itself, so
         # nothing escapes to here. It leaves the exception in env.
         report(env['action_dispatch.exception'], env)
+        observe(env, result, started) if observing
 
         trace.nil? ? result : mark_handled(result)
       end
@@ -59,6 +74,47 @@ module Devbench
     end
 
     private
+
+    # Classifies the finished request (failed / slow / nothing) and feeds the
+    # 429 spike detector. Inside the request's scope, so a signal carries its
+    # trace and user. Duration runs from entry to the application handing
+    # back its response; streaming a body after that is not counted.
+    def observe(env, result, started)
+      finished = RequestSignals.clock
+      duration_ms = (finished.monotonic_ms - started).floor
+      status, headers, = result
+      RequestSignals.observe(
+        status: status.is_a?(Integer) ? status : Integer(status.to_s, 10),
+        method: env['REQUEST_METHOD'],
+        route: symbol(env),
+        duration_ms: duration_ms,
+        streaming: streaming?(env, status.to_i, headers),
+        # Rails rendering a 500 itself is an exception: reported, or one the
+        # app chose to ignore (Devbench.ignore_exceptions), which must not
+        # come back as an http_500 either.
+        exception_reported: Current.exception_reported? || !env['action_dispatch.exception'].nil?,
+        finished_ms: finished.wall_ms
+      )
+    rescue StandardError, SystemStackError
+      # Never fail a response over instrumentation.
+      nil
+    end
+
+    # A 101 upgrade, a hijacked connection (a websocket takes the socket) or
+    # a text/event-stream response: its duration is a connection's lifetime,
+    # never a slow request.
+    def streaming?(env, status, headers)
+      return true if status == 101 || !env['rack.hijack_io'].nil?
+      return false unless headers.respond_to?(:each)
+
+      streaming = false
+      headers.each do |name, value|
+        key = name.to_s.downcase
+        streaming ||= key == 'rack.hijack'
+        streaming ||= key == 'content-type' && value.to_s.strip.downcase.start_with?('text/event-stream')
+      end
+      streaming
+    end
 
     def report(error, env)
       return if error.nil?

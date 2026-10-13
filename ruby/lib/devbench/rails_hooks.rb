@@ -3,7 +3,7 @@
 require_relative 'reporter'
 
 module Devbench
-  # The Rails-side exception hooks (docs/SERVER_SDK_SPEC.md, Capability 2).
+  # The Rails-side exception hooks (docs/server-sdk/unhandled-failures.md, Capability 2).
   #
   # Plain Ruby: nothing here names a Rails constant, so this file loads
   # without Rails. Devbench::Railtie installs the hooks against the real

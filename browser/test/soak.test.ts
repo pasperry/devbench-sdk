@@ -14,8 +14,8 @@ import { BUDGET } from '../src/budget.js';
  *
  * It measures *our* data structures, which is where the leak risk actually
  * lives: ring buffers, the counter table, and the pending-write list. The
- * capture hooks and DOM overhead are not soaked yet: a browser soak driving a
- * real page is #228.
+ * capture hooks and DOM overhead are soaked on a real page in real Chrome by
+ * soak.browser.test.ts (`make soak-browser` for the long run).
  *
  * Duration is scaled by ADT_SOAK_EVENTS so CI runs it short on every PR and
  * long on a schedule.

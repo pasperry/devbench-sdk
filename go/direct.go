@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-// The direct transport (SERVER_SDK_SPEC "Direct mode", DECISIONS #160).
+// The direct transport (docs/server-sdk/transports.md "Direct mode", DECISIONS #160).
 //
 // With a DSN, the SDK does in-process what the sidecar does for it
 // otherwise: fingerprint each report, count repeats, flush counts to ingest
@@ -241,6 +241,12 @@ func (d *directClient) runTicker() {
 
 func (d *directClient) backgroundFlush() {
 	defer func() { _ = recover() }()
+	// A spike window the clock has left closes at the flush, and its
+	// spikes go out with this window's counts (this goroutine is not the
+	// counter's, but count is safe from any goroutine).
+	for _, s := range requestSpikes.tick(requestClock().UnixMilli()) {
+		d.count(spikeMessage(s), time.Now().Unix())
+	}
 	_ = d.flushCycle(context.Background())
 }
 
@@ -305,6 +311,26 @@ func truncateChars(s string, n int) string {
 // count adds one report to the current window.
 func (d *directClient) count(m message, now int64) {
 	sig, text := signalFor(m, d.cfg.service)
+	exemplar := ""
+	if m.Kind == "request" {
+		// Capability 2b: fingerprinted as the sidecar does the `request`
+		// control message; a signal whose status contradicts it is
+		// refused, never guessed at.
+		b, err := buildRequestSignal(d.cfg.service, requestSignal{
+			signal: m.Signal, method: m.Method, route: m.Route, status: m.Status,
+			durationMs: m.DurationMs, count: m.Count, total: m.Total,
+		})
+		if err != nil {
+			stats.failed.Add(1)
+			return
+		}
+		sig, text, exemplar = b.sig, b.text, b.exemplar
+		if m.Signal == signalRateLimitSpike {
+			m.User = nil // an aggregate: nobody in particular
+		}
+	} else {
+		exemplar = exemplarLine(m)
+	}
 	fp, _, err := computeFingerprint(sig)
 	if err != nil {
 		stats.failed.Add(1)
@@ -349,7 +375,7 @@ func (d *directClient) count(m message, now int64) {
 		if len(frames) > maxFrames {
 			frames = frames[:maxFrames]
 		}
-		d.details[fp] = &detail{kind: kind, text: text, exemplar: exemplarLine(m), frames: frames}
+		d.details[fp] = &detail{kind: kind, text: text, exemplar: exemplar, frames: frames}
 		d.order = append(d.order, fp)
 	}
 }
@@ -367,7 +393,7 @@ func addUser(e *entry, u User) {
 	e.users = append(e.users, u)
 }
 
-// Wire shapes: SERVER_SDK_SPEC "Wire protocol". Ingest rejects unknown
+// Wire shapes: docs/server-sdk/wire-protocol.md "Wire protocol". Ingest rejects unknown
 // fields, so nothing beyond these is ever sent.
 type flushCount struct {
 	FP            string `json:"fp"`
@@ -385,9 +411,17 @@ type flushBody struct {
 	Service    string       `json:"service"`
 	Release    string       `json:"release"`
 	SensorID   string       `json:"sensor_id"`
+	SDK        sdkInfo      `json:"sdk"`
 	Counts     []flushCount `json:"counts"`
 	Overflowed int          `json:"overflowed,omitempty"`
 	Dropped    int          `json:"dropped,omitempty"`
+}
+
+// sdkInfo names the SDK that sent a flush, on every request of it
+// (docs/server-sdk/wire-protocol.md, "the SDK's name and version"; #309).
+type sdkInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
 }
 
 type evidenceRequest struct {
@@ -446,7 +480,7 @@ func (d *directClient) flushNow(ctx context.Context) error {
 //
 // An empty window sends nothing — unless this process holds traced log
 // lines, when it sends one empty flush ("counts": []) as a poll
-// (SERVER_SDK_SPEC "Poll while holding lines"): need_logs only rides a
+// (docs/server-sdk/configuration.md "Poll while holding lines"): need_logs only rides a
 // flush response, so without it a quiet process would never hear that
 // triage wants lines only it has. Ingest accepts an empty flush from a
 // server key for exactly this.
@@ -475,18 +509,24 @@ func (d *directClient) flushCycle(ctx context.Context) error {
 	}
 	sort.Slice(counts, func(i, j int) bool { return counts[i].FP < counts[j].FP })
 
-	envelope := flushBody{
-		V: ProtocolVersion, Source: "server", Service: d.cfg.service, Release: d.cfg.release, SensorID: sensorID,
-	}
+	envelope := d.envelope()
 	return d.flushBatches(ctx, win, splitCounts(envelope, counts))
+}
+
+// envelope is every flush request's body without its counts: the one place
+// it is built, so a counts flush, each request of a split window and the
+// empty poll all carry the same fields (sdk included).
+func (d *directClient) envelope() flushBody {
+	return flushBody{
+		V: ProtocolVersion, Source: "server", Service: d.cfg.service, Release: d.cfg.release, SensorID: sensorID,
+		SDK: sdkInfo{Name: Name, Version: Version},
+	}
 }
 
 // flushBatches posts each batch of a window (an empty batch is the poll),
 // then answers what the responses asked for. Caller holds flushMu.
 func (d *directClient) flushBatches(ctx context.Context, win *window, batches [][]flushCount) error {
-	envelope := flushBody{
-		V: ProtocolVersion, Source: "server", Service: d.cfg.service, Release: d.cfg.release, SensorID: sensorID,
-	}
+	envelope := d.envelope()
 	dropped := int(d.dropped.Swap(0))
 	var askedLogs []string
 	asked := map[string]bool{}

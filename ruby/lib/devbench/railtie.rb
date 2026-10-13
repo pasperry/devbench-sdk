@@ -3,6 +3,7 @@
 require_relative 'middleware'
 require_relative 'rails_hooks'
 require_relative 'sidekiq_hooks'
+require_relative 'active_job_hooks'
 require_relative 'view_helper'
 
 module Devbench
@@ -29,7 +30,7 @@ module Devbench
       Railtie.auto_insert(app.config.middleware)
     end
 
-    # Puts the request's trace on every Rails log line (SERVER_SDK_SPEC,
+    # Puts the request's trace on every Rails log line (docs/server-sdk/trace-propagation.md,
     # Capability 1, requirement 2), so the sidecar can hand triage the server
     # lines of one user action. Appended to whatever the app already tags
     # with — e.g. [:request_id] — never replacing it. Before the middleware
@@ -64,6 +65,11 @@ module Devbench
         Devbench::RailsHooks.install_error_reporter(::Rails.error) if ::Rails.respond_to?(:error)
         if defined?(::ActiveSupport::Notifications)
           Devbench::RailsHooks.install_active_job(::ActiveSupport::Notifications)
+        end
+        # The request's trace into ActiveJob jobs, on any adapter. on_load
+        # runs now if ActiveJob::Base is already loaded, else when it loads.
+        if defined?(::ActiveSupport) && ::ActiveSupport.respond_to?(:on_load)
+          ::ActiveSupport.on_load(:active_job) { Devbench::ActiveJobHooks.install(self) }
         end
         # Native Sidekiq jobs never reach the ActiveJob hook. after_initialize
         # runs after every gem is required, so Gemfile order does not matter.

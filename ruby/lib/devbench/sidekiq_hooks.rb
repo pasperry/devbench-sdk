@@ -5,7 +5,7 @@ require_relative 'current'
 require_relative 'reporter'
 
 module Devbench
-  # Native Sidekiq jobs (docs/SERVER_SDK_SPEC.md, Capability 2, `job`).
+  # Native Sidekiq jobs (docs/server-sdk/unhandled-failures.md, Capability 2, `job`).
   #
   # A class that includes Sidekiq::Job never touches ActiveJob, so the
   # perform.active_job hook sees none of its failures. This is the

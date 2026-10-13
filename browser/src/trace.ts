@@ -1,7 +1,7 @@
 /**
  * The correlation id that ties a user action together across every service.
  *
- * Wire form (docs/SERVER_SDK_SPEC.md): `v1/<session>/<intent>/<hop>`
+ * Wire form (docs/server-sdk/trace-propagation.md): `v1/<session>/<intent>/<hop>`
  *
  * The browser originates it at hop 0 and each service increments. Without it,
  * client evidence cannot be joined to server logs and both detectors in §3.2

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# In-process log capture (docs/SERVER_SDK_SPEC.md, "In-process log capture
+# In-process log capture (docs/server-sdk/configuration.md, "In-process log capture
 # (direct mode)"): real ::Logger objects writing to real IO, real threads,
 # a real fork. Nothing of ours is stubbed; the clock is injected where age
 # eviction is tested (time is on the permitted list), and a clock that

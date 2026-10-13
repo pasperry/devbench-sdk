@@ -3,7 +3,7 @@
 module Devbench
   # The correlation id that ties a user action together across every service.
   #
-  # Wire form (docs/SERVER_SDK_SPEC.md): v1/<session>/<intent>/<hop>
+  # Wire form (docs/server-sdk/trace-propagation.md): v1/<session>/<intent>/<hop>
   #
   # This must agree exactly with the Go SDK and the sidecar's extraction regex.
   # A trace the browser writes and Rails mangles is worse than no trace: the

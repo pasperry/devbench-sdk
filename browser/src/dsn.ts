@@ -1,6 +1,6 @@
 /**
  * The DSN: one string per environment that carries the ingest base and key
- * (SERVER_SDK_SPEC.md, "Dev Bench naming and configuration").
+ * (docs/server-sdk/configuration.md, "Dev Bench naming and configuration").
  *
  *   https://<ingest key>@adt-ingest.onrender.com
  *

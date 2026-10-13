@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// Configuration (SERVER_SDK_SPEC "Dev Bench naming and configuration").
+// Configuration (docs/server-sdk/configuration.md "Dev Bench naming and configuration").
 //
 // One DSN per environment carries everything the SDK needs to send:
 //
@@ -384,6 +384,9 @@ const exitFlushBound = 2 * time.Second
 
 // closeTransports drains and stops whichever transports have been started.
 func closeTransports(ctx context.Context) error {
+	// The open 429 spike window is evaluated as it stands at exit, and its
+	// spikes are queued before the transports drain.
+	endSpikes()
 	errDirect := closeDirect(ctx)
 	errSocket := closeSocket(ctx)
 	if errDirect != nil {
@@ -416,6 +419,8 @@ func Flush(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// A spike window the clock has left closes at a flush.
+	tickSpikes()
 	if d := curDirect.Load(); d != nil {
 		return d.flushNow(ctx)
 	}

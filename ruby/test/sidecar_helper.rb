@@ -7,7 +7,7 @@ require 'fileutils'
 
 # A real unix socket server standing in for the sidecar. Not a stub: what the
 # tests assert on is the bytes that actually crossed the socket, which is the
-# wire contract (docs/SERVER_SDK_SPEC.md, "Control socket — v1").
+# wire contract (docs/server-sdk/control-socket.md, "Control socket — v1").
 module SidecarHelper
   SENTINEL = "__flush__\n"
 

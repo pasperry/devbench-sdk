@@ -1,4 +1,4 @@
-"""The shared contracts (docs/SERVER_SDK_SPEC.md, "Conformance"): the
+"""The shared contracts (docs/server-sdk/conformance.md, "Conformance"): the
 fingerprint, redaction, trace and protocol vectors in testdata/, and the
 egress outputs of the Go sidecar itself. If this SDK disagreed with the
 others by one byte, the same problem would be counted as two issues, or a
@@ -358,6 +358,87 @@ class ProtocolVectorsTest(unittest.TestCase):
         v = vectors("protocol_vectors.json", self)
         self.assertIn(devbench.PROTOCOL_VERSION, v["supported"])
         self.assertNotIn(devbench.PROTOCOL_VERSION, v["refused"])
+
+
+class RequestSignalVectorsTest(unittest.TestCase):
+    """Capability 2b (testdata/request_signal_vectors.json): every section,
+    every case. An empty section fails, so a truncated file cannot pass."""
+
+    def section(self, name: str) -> Any:
+        cases = vectors("request_signal_vectors.json", self)[name]
+        self.assertTrue(cases, "section %s is empty" % name)
+        return cases
+
+    def test_constants(self) -> None:
+        from devbench import reqsignal as R
+
+        c = self.section("constants")
+        self.assertEqual(c["slow_threshold_ms"], R.SLOW_THRESHOLD_MS)
+        self.assertEqual(c["spike_window_seconds"], R.SPIKE_WINDOW_SECONDS)
+        self.assertEqual(c["spike_min_count"], R.SPIKE_MIN_COUNT)
+        self.assertEqual(c["spike_min_percent"], R.SPIKE_MIN_PERCENT)
+        self.assertEqual(c["max_routes_per_window"], R.MAX_ROUTES_PER_WINDOW)
+        self.assertEqual(c["max_route_chars"], R.MAX_ROUTE_CHARS)
+        self.assertEqual(c["unknown_route"], R.UNKNOWN_ROUTE)
+        self.assertEqual(c["other_method"], R.OTHER_METHOD)
+
+    def test_classify(self) -> None:
+        from devbench import reqsignal as R
+
+        for v in self.section("classify"):
+            got = R.classify(v["status"], v["duration_ms"], v["exception_reported"], v["streaming"])
+            self.assertEqual(v["want"], got, v["name"])
+
+    def test_methods_and_routes(self) -> None:
+        from devbench import reqsignal as R
+
+        for v in self.section("methods"):
+            self.assertEqual(v["out"], R.normalize_method(v["in"]), "method %r" % v["in"])
+        for v in self.section("routes"):
+            self.assertEqual(v["out"], R.normalize_route(v["in"]), "route %r" % v["in"])
+
+    def test_build(self) -> None:
+        from devbench import reqsignal as R
+
+        for v in self.section("build"):
+            r = v["request"]
+            got = R.build(r["signal"], r["method"], r["route"], r.get("status", 0), r.get("duration_ms", 0),
+                          r.get("count", 0), r.get("total", 0))
+            s = v["signal"]
+            self.assertEqual(v["kind"], got.kind, v["name"])
+            self.assertEqual((s["kind"], s["type"], s["message"]), (got.kind, got.type, got.message), v["name"])
+            self.assertEqual(v["expected_fp"], got.fingerprint(v["service"]), v["name"])
+            self.assertEqual(v["text"], got.text, v["name"])
+            self.assertEqual(v["exemplar"], got.exemplar, v["name"])
+            norm = F.normalize(got.kind, "server", v["service"], got.type, got.message, [])
+            self.assertEqual(v["normalized"]["template"], norm["template"], v["name"])
+            self.assertEqual(v["normalized"]["type"], norm["type"], v["name"])
+
+    def test_invalid_build(self) -> None:
+        from devbench import reqsignal as R
+
+        for v in self.section("invalid_build"):
+            with self.assertRaises(R.InvalidSignal, msg=v["name"]):
+                R.build(v["signal"], "GET", "/x", v["status"], 1)
+
+    def test_spikes(self) -> None:
+        from devbench import reqsignal as R
+
+        for case in self.section("spikes"):
+            d = R.SpikeDetector()
+            for i, step in enumerate(case["steps"]):
+                if "observe" in step:
+                    o = step["observe"]
+                    got: list = []
+                    for _ in range(o.get("repeat", 1)):
+                        got.extend(d.observe(o["t_ms"], o["method"], o["route"], o["status"]))
+                elif "tick_ms" in step:
+                    got = d.tick(step["tick_ms"])
+                elif step.get("end"):
+                    got = d.end()
+                else:
+                    self.fail("%s: step %d has no action" % (case["name"], i))
+                self.assertEqual(step["want"], [s._asdict() for s in got], "%s, step %d" % (case["name"], i))
 
 
 if __name__ == "__main__":

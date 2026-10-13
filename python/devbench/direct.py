@@ -1,4 +1,4 @@
-"""Direct mode (docs/SERVER_SDK_SPEC.md, "Direct mode"): fingerprint and
+"""Direct mode (docs/server-sdk/transports.md, "Direct mode"): fingerprint and
 count in-process, flush counts to ingest once a minute, upload one redacted
 evidence bundle per fingerprint only when ingest asks, and answer ingest's
 requests for the log lines of a trace (need_logs) from the in-process buffer,
@@ -34,10 +34,10 @@ import urllib.error
 import urllib.request
 from typing import IO, Any, Dict, List, Optional, Tuple
 
-from . import fingerprint, logs, scrub
+from . import fingerprint, logs, reqsignal, scrub
 from .config import DSN
 from .egress_policy import EgressPolicy
-from .version import PROTOCOL_VERSION, VERSION
+from .version import PROTOCOL_VERSION, SDK_NAME, VERSION
 
 MAX_FINGERPRINTS = 512
 MAX_USERS = 20
@@ -56,6 +56,8 @@ MAX_SLICE_BYTES = 64 * 1024
 MAX_SLICES_PER_POST = 25
 HTTP_TIMEOUT = 5.0
 EXIT_TIMEOUT = 2.0
+# Which SDK sent a flush, on every request of it (#310).
+_SDK_FIELD = {"name": SDK_NAME, "version": VERSION}
 
 
 class _Count:
@@ -146,9 +148,33 @@ class DirectTransport:
         except Exception:
             return False
 
+    def observe_request(self, t_ms: int, method: str, route: str, status: int) -> None:
+        """Feeds one finished request to this process's 429 spike detector
+        (Capability 2b) and counts the spikes of any window it closed. The
+        first 429 starts the flush thread, so a process answering nothing but
+        429s still reports its spike within a minute. Never raises, never
+        does I/O."""
+        try:
+            self._check_fork()
+            closed = self._spikes.observe(t_ms, method, route, status)
+            if status == 429:
+                self._ensure_running()
+            self._record_spikes(closed)
+        except Exception:
+            pass
+
+    def end_requests(self) -> None:
+        """Process exit: the open spike window is evaluated as it stands."""
+        try:
+            self._check_fork()
+            self._record_spikes(self._spikes.end())
+        except Exception:
+            pass
+
     def stop(self) -> None:
         """A last flush (bounded to EXIT_TIMEOUT), then the thread stops."""
         try:
+            self.end_requests()
             self.flush(timeout=EXIT_TIMEOUT)
             self._stopped = True
             with self._wake:
@@ -205,7 +231,33 @@ class DirectTransport:
             return self._exception_signal(payload)
         if kind == "handled_failure":
             return self._handled_signal(payload)
+        if kind == "request":
+            return self._request_signal(payload)
         return None
+
+    def _request_signal(self, payload: dict) -> Optional[_Signal]:
+        """A failed or slow request, or a 429 spike (Capability 2b): the
+        sidecar's handling of the ``request`` message. A spike carries no
+        user."""
+        signal = payload.get("signal")
+        try:
+            built = reqsignal.build(signal, payload.get("method"), payload.get("route"), payload.get("status") or 0,
+                                    payload.get("duration_ms") or 0, payload.get("count") or 0, payload.get("total") or 0)
+        except reqsignal.InvalidSignal:
+            return None
+        fp = built.fingerprint(self.service)
+        if fp is None:
+            return None
+        user = None if signal == reqsignal.RATE_LIMIT_SPIKE else _user(payload.get("user"))
+        return _Signal(fp, built.kind, built.text, user, [], built.exemplar)
+
+    def _record_spikes(self, spikes: List[reqsignal.Spike]) -> None:
+        for spike in spikes:
+            signal = self._request_signal({"kind": "request", "signal": reqsignal.RATE_LIMIT_SPIKE, "method": spike.method,
+                                           "route": spike.route, "status": 429, "count": spike.count, "total": spike.total})
+            if signal is not None:
+                with self._lock:
+                    self._record(signal)
 
     def _exception_signal(self, payload: dict) -> Optional[_Signal]:
         type_ = _text(payload.get("error"))
@@ -270,6 +322,8 @@ class DirectTransport:
         self._window: Dict[str, _Count] = {}
         self._details: Dict[str, _Detail] = {}
         self._overflowed = 0
+        # Per process: a forked child starts its own windows.
+        self._spikes = reqsignal.SpikeDetector()
         self._sensor_id = "py-" + secrets.token_hex(10)
         self._thread: Optional[threading.Thread] = None
 
@@ -317,6 +371,9 @@ class DirectTransport:
         """Phase 1, then whatever the responses asked for: learned rules
         first (a rule arriving with a request for the shape it governs
         applies to that request), then log slices, then evidence."""
+        # A spike window that has ended is closed here, so it is reported
+        # even when no later request arrives to close it.
+        self._record_spikes(self._spikes.tick(reqsignal.now_ms()))
         with self._lock:
             counts, overflowed = self._window, self._overflowed
             self._window = {}
@@ -383,8 +440,11 @@ class DirectTransport:
         return out
 
     def _envelope(self, counts: List[dict], overflowed: int) -> bytes:
+        """Every flush request's body: counts, each request of a split window
+        and the empty poll are all built here, so all carry ``sdk``."""
         body: Dict[str, Any] = {"v": PROTOCOL_VERSION, "tenant": "", "source": "server", "service": self.service,
-                                "release": self.release, "sensor_id": self._sensor_id, "counts": counts}
+                                "release": self.release, "sensor_id": self._sensor_id, "sdk": _SDK_FIELD,
+                                "counts": counts}
         if overflowed > 0:
             body["overflowed"] = overflowed
         return _json(body)

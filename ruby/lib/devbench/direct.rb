@@ -8,9 +8,10 @@ require_relative 'fingerprint'
 require_relative 'scrub'
 require_relative 'egress_policy'
 require_relative 'logs'
+require_relative 'request_signals'
 
 module Devbench
-  # Direct mode (docs/SERVER_SDK_SPEC.md, "Direct mode"): fingerprint and
+  # Direct mode (docs/server-sdk/transports.md, "Direct mode"): fingerprint and
   # count in-process, flush counts to ingest once a minute, upload one
   # redacted evidence bundle per fingerprint only when ingest asks, and
   # answer ingest's requests for the log lines of a trace (need_logs) from
@@ -176,7 +177,24 @@ module Devbench
       case payload[:kind]
       when 'exception' then exception_signal(payload)
       when 'handled_failure' then handled_signal(payload)
+      when 'request' then request_signal(payload)
       end
+    end
+
+    # recordRequest (internal/reqsignal): {error|degradation, server,
+    # service, http_<status>|slow_request|http_429_spike, "<METHOD> <route>"},
+    # no frames. A signal/status pair the sidecar would drop is dropped.
+    def request_signal(payload)
+      built = RequestSignals.build(signal: payload[:signal], method: payload[:method], route: payload[:route],
+                                   status: payload[:status], duration_ms: payload[:duration_ms],
+                                   count: payload[:count], total: payload[:total])
+      return nil if built.nil?
+
+      fp = Fingerprint.compute(kind: built.kind, source: 'server', service: @service,
+                               type: built.type, message: built.message)
+      return nil if fp.nil?
+
+      Signal.new(fp, built.kind, built.text, user(payload[:user]), [], built.exemplar)
     end
 
     # recordException: {error, server, service, type, message[0,2000], frames}.
@@ -338,6 +356,9 @@ module Devbench
     # (a rule arriving with a request for the shape it governs applies to
     # that request), then log slices, then evidence.
     def flush_cycle(deadline)
+      # A 429 spike window the clock has left closes at a flush: counted
+      # here, so it goes out with this one.
+      RequestSignals.tick!(self)
       counts, overflowed = @lock.synchronize do
         taken = [@window, @overflowed]
         @window = {}
@@ -406,9 +427,14 @@ module Devbench
       out
     end
 
+    # Which SDK sent a flush, on every request of it (#308): counts, each
+    # request of a split window and the empty poll are all built here.
+    SDK_FIELD = { name: SDK_NAME, version: VERSION }.freeze
+    private_constant :SDK_FIELD
+
     def envelope(counts, overflowed)
       body = { v: PROTOCOL_VERSION, tenant: '', source: 'server', service: @service, release: @release,
-               sensor_id: @sensor_id, counts: counts }
+               sensor_id: @sensor_id, sdk: SDK_FIELD, counts: counts }
       body[:overflowed] = overflowed if overflowed.positive?
       JSON.generate(body)
     end

@@ -4,7 +4,7 @@ require 'minitest/autorun'
 require 'json'
 require 'devbench'
 
-# The chat widget's signed identity (docs/SERVER_SDK_SPEC.md, Capability 6),
+# The chat widget's signed identity (docs/server-sdk/chat-widget.md, Capability 6),
 # held to testdata/widget_identity_vectors.json: every `sign` token byte for
 # byte, every `refuse` input refused. The Go signer and the chat service's
 # verifier pass the same file; a divergence is a widget that never renders.

@@ -134,6 +134,39 @@ the user.
   reporting is dropped, and the application's own exception always comes
   out unchanged.
 
+### Failed, slow and rate-limited requests
+
+The same middleware also watches what each request does *without* raising
+(no code needed; Django, Flask, FastAPI/Starlette and bare WSGI/ASGI):
+
+| Signal | When | Reported as |
+|---|---|---|
+| Failed | the app answered 500–599 and nothing was reported as an exception during the request | kind `error`, type `http_<status>` |
+| Slow | the app took **more than 3,000 ms** and answered 100–499 | kind `degradation`, type `slow_request` |
+| 429 spike | in one unix minute, a route answered at least ten 429s and at least 10% of its requests were 429s | kind `error`, type `http_429_spike` |
+
+- **Exceptions win.** An unhandled error, or a `capture_exception` during
+  the request, is the report on its own: its 500 is not also failed. A
+  `report_handled` changes nothing: a 5xx after it is still failed, and the
+  `x-adt-handled` header is unchanged. Each status is its own problem
+  (`http_500`, `http_503`). Raising an `HTTPException` with a 5xx status is
+  a response, so it is failed.
+- **Slow** is measured on a monotonic clock from the middleware's entry
+  until the app hands back its response (the WSGI callable returns, the
+  ASGI app's coroutine completes, Django's `get_response` returns).
+  Exactly 3,000 ms is not slow. Event streams (`text/event-stream`) are
+  never slow; a streaming 5xx is still failed. The threshold is a
+  constant, not a setting, for now.
+- **429 spikes** are counted per process and reported once per route per
+  minute, when the minute closes (the next request in a later minute, the
+  next flush, or process exit), with no trace or user.
+- Other 4xx are not reported. Each signal is identified by the method and
+  the route **pattern**, never the raw path: Django's
+  `resolver_match.route` (`orders/<int:id>`), Flask's URL rule
+  (`/orders/<int:id>`), the FastAPI/Starlette route path
+  (`/orders/{id}`), or `*` when no route matched (and for a bare WSGI/ASGI
+  app). A failed or slow request carries its trace and user.
+
 ## What is sent, and when
 
 - Each report is **fingerprinted and counted in the process** (class,

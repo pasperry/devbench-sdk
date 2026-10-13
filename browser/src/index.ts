@@ -25,5 +25,4 @@ export { RingBuffer } from './buffer.js';
 export { CounterTable, type Count } from './counters.js';
 export { Transport, PROTOCOL_VERSION, type FlushRequest, type FlushResponse } from './transport.js';
 
-/** SDK version: this package's own (the release tag browser-vX.Y.Z checks it equals package.json). */
-export const VERSION = '0.7.0';
+export { VERSION, SDK_NAME } from './version.js';

@@ -4,7 +4,7 @@ require 'base64'
 require 'openssl'
 
 module Devbench
-  # The chat widget's signed identity (docs/SERVER_SDK_SPEC.md, "Capability 6
+  # The chat widget's signed identity (docs/server-sdk/chat-widget.md, "Capability 6
   # — Chat widget").
   #
   #   dbw1.<base64url(issued_at \n email \n account \n role \n chat)>.<base64url(HMAC-SHA256)>

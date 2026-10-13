@@ -13,6 +13,8 @@
 #   * reports unhandled exceptions             (Devbench::Middleware, Devbench::Railtie,
 #                                               Devbench::SidekiqHooks,
 #                                               Devbench.capture_exception)
+#   * reports failed (5xx) and slow requests  (Devbench::Middleware,
+#     and 429 spikes                          Devbench::RequestSignals)
 #   * keeps recent log lines per trace         (Devbench::Logs; direct mode)
 #   * renders the browser sensor's tag         (devbench_script_tag)
 #
@@ -23,6 +25,7 @@ require_relative 'devbench/trace'
 require_relative 'devbench/current'
 require_relative 'devbench/backtrace'
 require_relative 'devbench/identity'
+require_relative 'devbench/request_signals'
 require_relative 'devbench/middleware'
 require_relative 'devbench/http'
 require_relative 'devbench/reporter'
@@ -30,6 +33,7 @@ require_relative 'devbench/session'
 require_relative 'devbench/session_middleware'
 require_relative 'devbench/rails_hooks'
 require_relative 'devbench/sidekiq_hooks'
+require_relative 'devbench/active_job_hooks'
 require_relative 'devbench/logs'
 require_relative 'devbench/widget_identity'
 require_relative 'devbench/view_helper'

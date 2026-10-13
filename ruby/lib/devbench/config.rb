@@ -3,7 +3,7 @@
 require 'uri'
 
 module Devbench
-  # Where reports go, parsed from DEVBENCH_DSN (docs/SERVER_SDK_SPEC.md, "Dev
+  # Where reports go, parsed from DEVBENCH_DSN (docs/server-sdk/configuration.md, "Dev
   # Bench naming and configuration"; DECISIONS #161):
   #
   #   https://<public>:<secret>@<host>[:port]    from `adt dsn create`

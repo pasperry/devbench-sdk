@@ -15,7 +15,7 @@ import (
 	"unicode/utf8"
 )
 
-// In-process log capture (SERVER_SDK_SPEC "In-process log capture (direct
+// In-process log capture (docs/server-sdk/configuration.md "In-process log capture (direct
 // mode)", DECISIONS #161).
 //
 // In direct mode there is no sidecar reading the application's log stream,

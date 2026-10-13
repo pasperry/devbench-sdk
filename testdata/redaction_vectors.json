@@ -25,7 +25,13 @@
     "Unix timestamps and ids longer than 15 digits alone while still redacting",
     "phone numbers. It holds wherever `shared` does. The backend reads it now;",
     "every SDK adopts it in the follow-up named in docs/SERVER_SDK_SPEC.md",
-    "(\"Redaction of field values\"), after which it is checked everywhere."
+    "(\"Redaction of field values\"), after which it is checked everywhere.",
+    "",
+    "`key_value` pins the email rule's left edge (#148): the local part stops at",
+    "`=` and `:`, so `customer=sam@example.com` keeps its key and a JSON line",
+    "keeps `\"email\":`. It holds wherever `shared` does. The backend reads it now;",
+    "every SDK adopts it in the follow-up named in docs/server-sdk/conformance.md",
+    "(\"Email rule\"), after which it is checked everywhere."
   ],
   "shared": [
     {
@@ -270,6 +276,43 @@
       "name": "a number glued to a letter after it is not a phone",
       "in": "build 555123456abc",
       "out": "build 555123456abc"
+    }
+  ],
+  "key_value": [
+    {
+      "name": "key=value keeps the key",
+      "in": "customer=sam@example.com",
+      "out": "customer=<redacted:email>"
+    },
+    {
+      "name": "a Go slog line keeps every key",
+      "in": "level=ERROR msg=\"lookup failed\" customer=sam@example.com id=7",
+      "out": "level=ERROR msg=\"lookup failed\" customer=<redacted:email> id=7"
+    },
+    {
+      "name": "a JSON log line keeps its key",
+      "in": "{\"email\":\"sam@example.com\",\"status\":500}",
+      "out": "{\"email\":\"<redacted:email>\",\"status\":500}"
+    },
+    {
+      "name": "key:value with no space keeps the key",
+      "in": "bounced to:sam@example.com",
+      "out": "bounced to:<redacted:email>"
+    },
+    {
+      "name": "a query string keeps its key and the next parameter",
+      "in": "GET /reset?email=sam@example.com&step=2",
+      "out": "GET /reset?email=<redacted:email>&step=2"
+    },
+    {
+      "name": "connection-string credentials still run before the email rule",
+      "in": "dsn=postgres://admin:s3cretpw@db.internal:5432/app",
+      "out": "dsn=postgres://<redacted:credentials>@db.internal:5432/app"
+    },
+    {
+      "name": "schemeless user:password@host still loses the password; the user name stays",
+      "in": "proxy=svc:hunter2@proxy.corp.example.com",
+      "out": "proxy=svc:<redacted:email>"
     }
   ]
 }

@@ -1,6 +1,6 @@
 /**
  * The chat widget loader: the only chat code in the core bundle
- * (SERVER_SDK_SPEC.md, "Capability 6 — Chat widget" › Loading).
+ * (docs/server-sdk/chat-widget.md, "Capability 6 — Chat widget" › Loading).
  *
  * No token → nothing at all. With one, after the page's `load` (and an idle
  * callback where there is one) it asks `GET <api>/v1/chat/widget` whether this

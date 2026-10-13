@@ -15,7 +15,7 @@ import (
 	"unicode/utf8"
 )
 
-// The chat widget's signed identity (docs/SERVER_SDK_SPEC.md, "Capability 6 —
+// The chat widget's signed identity (docs/server-sdk/chat-widget.md, "Capability 6 —
 // Chat widget"). The client's server signs the signed-in user with the
 // tenant's widget secret (DEVBENCH_WIDGET_SECRET); the page hands the token to
 // the browser SDK, which shows the widget only to users the chat service

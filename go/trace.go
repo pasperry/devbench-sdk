@@ -30,7 +30,7 @@
 //	devbench.CaptureException(ctx, err)
 //
 // Reports take exactly one of two transports, decided at start
-// (SERVER_SDK_SPEC "Transports"):
+// (docs/server-sdk/transports.md "Transports"):
 //
 //   - direct (a DSN is set — DEVBENCH_DSN, ADT_DSN or Options.DSN): reports
 //     are fingerprinted, counted and redacted in-process and flushed to

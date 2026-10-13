@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Polling while holding lines (SERVER_SDK_SPEC "Poll while holding lines").
+// Polling while holding lines (docs/server-sdk/configuration.md "Poll while holding lines").
 // need_logs only rides a flush response, so a process that holds traced
 // lines and has nothing to report must still flush, empty, once per
 // interval — or a request for lines only it has is never answered.

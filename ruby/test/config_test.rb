@@ -7,7 +7,7 @@ require 'tmpdir'
 require 'pathname'
 require 'devbench'
 
-# DSN parsing and configuration (docs/SERVER_SDK_SPEC.md, "Dev Bench naming
+# DSN parsing and configuration (docs/server-sdk/configuration.md, "Dev Bench naming
 # and configuration"), and which transport that selects.
 class DSNTest < Minitest::Test
   KEY = 'adt_server_abc123'

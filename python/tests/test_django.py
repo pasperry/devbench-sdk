@@ -10,6 +10,7 @@ import os
 import unittest
 
 from .helpers import FakeIngest, http, require, serve_asgi, serve_wsgi
+from .request_cases import USER, RequestSignalCases, restore_clocks
 
 INGEST: FakeIngest
 BASE = ""
@@ -130,6 +131,55 @@ class DjangoTest(unittest.TestCase):
         self.assertEqual({"x-adt-trace": "v1/dj4/f/3"}, data["headers"])
         _, _, body = http("GET", BASE + "/fine", {"x-adt-trace": "garbage"})
         self.assertEqual("None", json.loads(body)["trace"], "a malformed header is ignored, not rejected")
+
+
+_DJANGO_ROUTES = {"fail": "fail/<int:order>", "boom": "boom", "captured": "captured", "handled": "sig-handled",
+                  "slow": "slow/<int:ms>", "stream-fail": "stream-fail", "real-slow": "real-slow", "limited": "limited"}
+
+
+class DjangoWSGIRequestSignalsTest(RequestSignalCases, unittest.TestCase):
+    """Capability 2b under Django's WSGI handler: the route is
+    resolver_match.route."""
+
+    routes = _DJANGO_ROUTES
+    handled_path = "/sig-handled"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.base = BASE
+        cls.ingest = INGEST
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        restore_clocks()
+
+    def setUp(self) -> None:
+        self.reset_signals()
+
+    def test_an_unmatched_route_is_star_and_never_the_path(self) -> None:
+        self.assertEqual(404, self.get("/fail/not-a-number")[0])
+        self.assertEqual([], self.flushed(), "a fast 404 is nothing")
+
+    def test_a_response_that_breaks_the_instrumentation_is_still_answered(self) -> None:
+        status, _, body = self.get("/broken", evaluated=False)
+        self.assertEqual(503, status)
+        self.assertEqual(b"still answered", body)
+
+
+class DjangoASGIRequestSignalsTest(DjangoWSGIRequestSignalsTest):
+    """The same under Django's ASGI handler (sync views in its thread pool,
+    async views on the loop), and a route joined across include()."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.base = ASGI_BASE
+        cls.ingest = INGEST
+
+    def test_an_async_view_and_an_included_route(self) -> None:
+        self.assertEqual(504, self.get("/v2/orders/ab-12/async-fail")[0])
+        entry = self.only(self.flushed())
+        self.assertEqual(self.fp("failed", "v2/orders/<slug:ref>/async-fail", 504), entry["fp"])
+        self.assertEqual([USER], entry["users"])
 
 
 if __name__ == "__main__":

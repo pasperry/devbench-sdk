@@ -6,7 +6,7 @@ require_relative 'transport'
 
 module Devbench
   # Turns a failure into a report — the control message of
-  # docs/SERVER_SDK_SPEC.md, "Control socket — v1" — and hands it to the
+  # docs/server-sdk/control-socket.md, "Control socket — v1" — and hands it to the
   # active transport (Devbench.transport): direct to Dev Bench when a DSN is
   # set, else the local sidecar's socket.
   #
@@ -19,7 +19,7 @@ module Devbench
   module Reporter
     DEFAULT_SOCKET = '/tmp/adt-sidecar.sock'
 
-    # docs/SERVER_SDK_SPEC.md, "Control socket — v1".
+    # docs/server-sdk/control-socket.md, "Control socket — v1".
     MAX_MESSAGE = 2000
     MAX_HANDLED_MESSAGE = 500
 
@@ -111,7 +111,13 @@ module Devbench
       # would replace the application's own exception, so nothing is.
       def capture(error, context:, handled:, symbol: nil)
         return nil unless error.is_a?(Exception)
-        return nil if reported?(error) || ignored?(error)
+        return nil if ignored?(error)
+
+        # The request (or job) this happened in has reported an exception,
+        # whichever hook sent it first: a 5xx after it is not also a
+        # `failed` request (Capability 2b).
+        note_exception
+        return nil if reported?(error)
 
         # Marked before sending, so a second hook reached while this one is
         # still writing does not send it again.
@@ -150,6 +156,12 @@ module Devbench
       end
 
       private
+
+      def note_exception
+        Current.record_exception if Current.scoped?
+      rescue StandardError, SystemStackError
+        nil
+      end
 
       def mark_reported(error)
         error.instance_variable_set(REPORTED_IVAR, true)

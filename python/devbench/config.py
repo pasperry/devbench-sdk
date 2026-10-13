@@ -1,5 +1,5 @@
 """Where reports go, parsed from DEVBENCH_DSN, and everything else read at
-start (docs/SERVER_SDK_SPEC.md, "Dev Bench naming and configuration";
+start (docs/server-sdk/configuration.md, "Dev Bench naming and configuration";
 DECISIONS #161)."""
 
 from __future__ import annotations

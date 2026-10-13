@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-// Answering log slice requests (SERVER_SDK_SPEC "In-process log capture",
+// Answering log slice requests (docs/server-sdk/configuration.md "In-process log capture",
 // Delivery).
 //
 // A flush response to a server key may carry need_logs: [{"trace": key}],

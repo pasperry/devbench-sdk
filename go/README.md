@@ -130,6 +130,9 @@ Log with `slog.InfoContext(c.Request.Context(), ...)` or
 | A failure deliberately absorbed | `devbench.ReportHandled(ctx, err, "billing.Invoicer.Persist")` | `handled_failure` (+ the `x-adt-handled` count) |
 | Who was affected | `ctx = devbench.WithUser(ctx, devbench.User{Email: u.Email, Account: acct.ID})` | affected users, never in evidence |
 | Outbound trace | `&http.Client{Transport: devbench.WrapTransport(nil)}` | `x-adt-trace` header, hop + 1 |
+| A 5xx answered without an exception | automatic in the middleware | `failed`: kind `error`, type `http_<status>` |
+| A request over 3 s | automatic in the middleware | `slow`: kind `degradation`, type `slow_request` |
+| A burst of 429s on one route | automatic in the middleware | `rate_limit_spike`: kind `error`, type `http_429_spike` |
 | Server log lines for triage | `slog.New(devbench.NewLogHandler(h))`, log with the request's context | captured per trace; sent redacted when asked (below) |
 
 Set the user once per request, in your auth middleware:
@@ -146,6 +149,32 @@ if err := deals.Save(ctx, d); err != nil {
     return
 }
 ```
+
+### Failed, slow and rate-limited requests
+
+The middleware also watches what each request does *without* raising
+(no code needed):
+
+- **Failed:** the handler answered 500–599 and nothing was reported as an
+  exception during the request. A panic or a `CaptureException` is the
+  report on its own; a `ReportHandled` changes nothing (a 5xx after it is
+  still failed). Each status is its own problem (`http_500`, `http_503`).
+- **Slow:** the handler took **more than 3,000 ms** (exactly 3,000 is not
+  slow), measured from the middleware's entry until `ServeHTTP` returns,
+  with a status of 100–499. Streaming responses (`text/event-stream`, a
+  101 upgrade, a hijacked connection) are never slow. The threshold is a
+  constant, not a setting, for now.
+- **429 spike:** in one unix minute, a route answered at least ten 429s and
+  at least 10% of its requests were 429s. Reported once per route per
+  minute, when the minute closes (the next request in a later minute, a
+  flush, or `Close`), counted per process, with no trace or user.
+
+Other 4xx are not reported. Each signal is identified by the method and
+the route **pattern**, never the raw path: the `ServeMux` pattern without
+its method (`/deals/{id}`), gin's route (`/deals/:id`), or `*` when no
+route matched. On Go 1.22, where `Request.Pattern` does not exist yet,
+the pattern is read from a `ServeMux` that `Handled` or `Middleware` wraps
+directly; gin routes and other wrappers report `*` there.
 
 ## Chat widget identity
 
@@ -281,7 +310,7 @@ panics into the application.
   or gin's route; with another router it is empty, never the raw path.
 - **Goroutines.** Only the request goroutine is covered: a panic in a
   goroutine the handler starts is beyond any middleware, as with Sentry.
-- Go 1.22+. Route symbols need 1.23+.
+- Go 1.22+. Route symbols need 1.23+ (request signals' routes: see above).
 
 ## Test
 

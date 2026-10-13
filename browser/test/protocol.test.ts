@@ -20,7 +20,7 @@ const vectorsPath = resolve(process.env.DEVBENCH_TESTDATA ?? resolve(here, '../.
 const vectors: ProtocolVectors = JSON.parse(readFileSync(vectorsPath, 'utf8'));
 
 /**
- * The protocol version (docs/SERVER_SDK_SPEC.md, "Protocol version"): the
+ * The protocol version (docs/server-sdk/protocol-version.md, "Protocol version"): the
  * entry point declares the one every SDK and ingest agree on, so a release
  * speaking a version ingest refuses cannot pass.
  */

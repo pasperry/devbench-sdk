@@ -6,7 +6,7 @@ require 'devbench'
 require 'devbench/fingerprint'
 
 # The fingerprint contract, shared with the Go sidecar and the browser SDK
-# (docs/SERVER_SDK_SPEC.md, "Conformance"). Direct mode fingerprints
+# (docs/server-sdk/conformance.md, "Conformance"). Direct mode fingerprints
 # in-process; if it disagreed with the sidecar by one byte, a customer moving
 # between modes would see every issue split in two.
 #

@@ -5,7 +5,7 @@ require 'socket'
 
 module Devbench
   # Sidecar mode: each report is one line of JSON on the local sidecar's
-  # unix socket (docs/SERVER_SDK_SPEC.md, "Control socket — v1"). Used when no
+  # unix socket (docs/server-sdk/control-socket.md, "Control socket — v1"). Used when no
   # DSN is set; unchanged from 0.4.
   #
   # Never blocks for long: this runs inside rescue blocks and exception

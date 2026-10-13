@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import unittest
+from typing import Any
 
 import devbench
 from devbench import _core
 
 from .helpers import FakeIngest, fresh, http, require, serve_wsgi
+from .request_cases import CLOCK, USER, RequestSignalCases, restore_clocks
 
 log = logging.getLogger("acme.flask")
 
@@ -111,6 +114,86 @@ class FlaskTest(unittest.TestCase):
         self.assertEqual({"trace": "v1/fl3/f/0", "user": {"email": "a@b.test", "account": "acct-7"}}, json.loads(body))
         _, _, body = http("GET", self.base + "/fine")
         self.assertEqual({"trace": "None", "user": {"account": "acct-7"}}, json.loads(body))
+
+
+class FlaskRequestSignalsTest(RequestSignalCases, unittest.TestCase):
+    routes = {"fail": "/fail/<int:order>", "boom": "/boom", "captured": "/captured", "handled": "/handled",
+              "slow": "/slow/<int:ms>", "stream-fail": "/stream-fail", "real-slow": "/real-slow", "limited": "/limited"}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        require("flask", unittest.TestCase())
+        from flask import Flask, Response
+
+        from devbench.flask import Devbench
+
+        cls.ingest = FakeIngest()
+        fresh(cls.ingest.dsn(), flush_interval=3600)
+        app = Flask("acme_signals")
+
+        @app.before_request
+        def who() -> None:
+            devbench.set_user(**USER)
+
+        @app.get("/fail/<int:order>")
+        def fail(order: int) -> Any:
+            return "inventory unavailable", 503
+
+        @app.get("/boom")
+        def boom() -> Any:
+            raise PaymentDeclined("boom")
+
+        @app.get("/captured")
+        def captured() -> Any:
+            devbench.capture_exception(ValueError("upstream refused"))
+            return "bad gateway", 502
+
+        @app.get("/handled")
+        def handled() -> Any:
+            devbench.report_handled(ValueError("dup"), symbol="flask.signals.handled")
+            return "unavailable", 503
+
+        @app.get("/slow/<int:ms>")
+        def slow(ms: int) -> Any:
+            CLOCK.advance_ms(ms)
+            return "ok"
+
+        @app.get("/slow-captured")
+        def slow_captured() -> Any:
+            devbench.capture_exception(ValueError("cache miss"))
+            CLOCK.advance_ms(4000)
+            return "ok"
+
+        @app.get("/stream")
+        def stream() -> Any:
+            CLOCK.advance_ms(60000)
+            return Response("data: x\n\n", status=200, content_type="text/event-stream; charset=utf-8")
+
+        @app.get("/stream-fail")
+        def stream_fail() -> Any:
+            return Response("data: x\n\n", status=503, content_type="text/event-stream")
+
+        @app.get("/limited")
+        def limited() -> Any:
+            return "slow down", 429
+
+        @app.get("/real-slow")
+        def real_slow() -> Any:
+            time.sleep(3.1)
+            return "ok"
+
+        Devbench(app)
+        cls.base, cls.stop = serve_wsgi(app)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        restore_clocks()
+        cls.stop()
+        cls.ingest.close()
+        _core.reset()
+
+    def setUp(self) -> None:
+        self.reset_signals()
 
 
 if __name__ == "__main__":

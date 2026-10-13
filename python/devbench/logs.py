@@ -1,4 +1,4 @@
-"""In-process log capture (docs/SERVER_SDK_SPEC.md, "In-process log capture
+"""In-process log capture (docs/server-sdk/configuration.md, "In-process log capture
 (direct mode)"): recent log lines kept in memory, keyed by the trace that was
 current when each was written, so triage can be handed the server lines of
 one user action without a sidecar.

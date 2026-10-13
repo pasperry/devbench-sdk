@@ -17,7 +17,7 @@ from typing import Any, Callable, Optional
 
 from asgiref.sync import iscoroutinefunction, markcoroutinefunction
 
-from .. import _core, _integration, context
+from .. import _core, _integration, _requests, context
 from ..trace import WSGI_HEADER, Trace
 
 
@@ -34,19 +34,23 @@ class DevbenchMiddleware:
     def __call__(self, request: Any) -> Any:
         if self._async:
             return self.__acall__(request)
-        if not _core.enabled():
+        if not _core.enabled() or _requests.observing():
             return self.get_response(request)
-        with context.scoped(_parse(request)):
+        with context.scoped(_parse(request)) as scope:
+            observed = _requests.begin(scope, getattr(request, "method", None))
             response = self.get_response(request)
             _mark_handled(response)
+            _finish(observed, request, response)
             return response
 
     async def __acall__(self, request: Any) -> Any:
-        if not _core.enabled():
+        if not _core.enabled() or _requests.observing():
             return await self.get_response(request)
-        with context.scoped(_parse(request)):
+        with context.scoped(_parse(request)) as scope:
+            observed = _requests.begin(scope, getattr(request, "method", None))
             response = await self.get_response(request)
             _mark_handled(response)
+            _finish(observed, request, response)
             return response
 
 
@@ -74,6 +78,22 @@ def _symbol(request: Any) -> Optional[str]:
         return getattr(match, "_func_path", None) or _integration.callable_path(match.func)
     except Exception:
         return None
+
+
+def _finish(observed: Any, request: Any, response: Any) -> None:
+    """Capability 2b: the route is the resolved URL pattern
+    (``resolver_match.route``, joined across includes); none matched is
+    "*"."""
+    if observed is None:
+        return
+    try:
+        match = getattr(request, "resolver_match", None)
+        observed.route = getattr(match, "route", None) if match is not None else None
+        status = getattr(response, "status_code", 0)
+        content_type = response.get("Content-Type") if response is not None else None
+        _requests.finish(observed, status, _requests.event_stream(content_type))
+    except Exception:
+        pass
 
 
 def _mark_handled(response: Any) -> None:

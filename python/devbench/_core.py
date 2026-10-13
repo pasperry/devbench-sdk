@@ -247,6 +247,8 @@ def _exit_flush() -> None:
     current = _transport
     if isinstance(current, DirectTransport):
         try:
+            # The open 429 spike window is evaluated as it stands at exit.
+            current.end_requests()
             current.flush(timeout=EXIT_TIMEOUT)
         except Exception:
             pass

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Answering log slice requests (SERVER_SDK_SPEC "In-process log capture
+# Answering log slice requests (docs/server-sdk/configuration.md "In-process log capture
 # (direct mode)", Delivery): a real Logger, a real HTTP server standing in
 # for ingest (FakeIngest answers need_logs and redaction and accepts
 # POST /v1/logs). What is asserted is what arrived over the socket.

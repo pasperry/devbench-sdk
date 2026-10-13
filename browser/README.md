@@ -13,7 +13,7 @@ layout). The rest of this section is for any other web app.
 **One script tag.** Put it before your app's scripts:
 
 ```html
-<script src="https://unpkg.com/devbench@0.7.0/dist/devbench.min.js"
+<script src="https://unpkg.com/devbench@0.8.0/dist/devbench.min.js"
         data-dsn="https://<public key>@adt-ingest.onrender.com"
         data-release="<build sha>"></script>
 ```
@@ -21,7 +21,7 @@ layout). The rest of this section is for any other web app.
 That is the whole install: the bundle reads `data-dsn` from its own tag and
 calls `Devbench.init` itself. `data-release` is optional. Without `data-dsn`
 the tag does nothing but define `Devbench`. (jsDelivr works the same:
-`https://cdn.jsdelivr.net/npm/devbench@0.7.0/dist/devbench.min.js`. Serving
+`https://cdn.jsdelivr.net/npm/devbench@0.8.0/dist/devbench.min.js`. Serving
 the file yourself works too — copy `dist/devbench.min.js`.)
 
 **Or npm, and one call:**

@@ -5,7 +5,7 @@ import "net/http"
 // Transport forwards the correlation id on outbound requests, with the hop
 // incremented.
 //
-// This is the capability that actually breaks (SERVER_SDK_SPEC, capability 1).
+// This is the capability that actually breaks (docs/server-sdk/trace-propagation.md, capability 1).
 // Accepting a header is easy and obviously correct; *forwarding* it is the part
 // people forget, and when it is missing the failure is silent — client evidence
 // simply cannot be joined to downstream logs, and both detectors degrade to

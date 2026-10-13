@@ -50,7 +50,7 @@ gem (upgrading the gem upgrades the sensor), with **only the public part**
 of `DEVBENCH_DSN`:
 
 ```html
-<script src="https://unpkg.com/devbench@0.7.0/dist/devbench.min.js"
+<script src="https://unpkg.com/devbench@0.8.0/dist/devbench.min.js"
         data-dsn="https://<public>@adt-ingest.onrender.com" data-release="<release>" defer></script>
 ```
 
@@ -124,6 +124,39 @@ frames with paths relative to `Rails.root`, the trace, and the user.
   reporting is dropped, and the application's own exception always comes
   out unchanged.
 
+## Failed and slow requests
+
+`Devbench::Middleware` also reports what a request does *without*
+raising. Nothing to set up, and no new API:
+
+| Signal | When | Reported as |
+|---|---|---|
+| **Failed** | the app answered 500–599 and no exception was reported during the request | `http_503 at PUT DealsController#update` |
+| **Slow** | the app answered 100–499 after **more than 3 seconds** (3,000 ms exactly is not slow) | `slow_request at GET DealsController#index` |
+| **429 spike** | one action answered at least ten 429s in one minute, and at least 10% of its requests | `http_429_spike at GET DealsController#index` |
+
+- **The exception wins.** A 500 page Rails rendered for an exception, or a
+  5xx after `Rails.error.report` / `Devbench.capture_exception`, is
+  reported once, as the exception. An exception you ignore
+  (`Devbench.ignore_exceptions`) does not come back as an `http_500`. A
+  slow request is slow whatever else happened in it.
+- **`report_handled` changes nothing here:** a 5xx after it is still
+  failed, and the `x-adt-handled` header is unchanged.
+- **Other 4xx are not reported.** A 404 or 422 is a status code, not a
+  problem; only a burst of 429s is.
+- The route is Rails' `Controller#action`, never the path (paths carry
+  ids). A request no route matched, and every request in a plain Rack
+  app, is `*`. The duration runs until the app hands back its response;
+  streaming the body after that does not count, and streaming responses
+  (`text/event-stream`, a websocket upgrade, a hijacked connection) are
+  never slow.
+- Failed and slow requests carry the trace and the user; a spike, which
+  is many requests, carries neither. Spikes are counted per process
+  (each Puma worker on its own) and reported when the minute is over, at
+  the next flush, or when the process exits.
+- The 3-second threshold is the same in every Dev Bench SDK and is not a
+  setting yet.
+
 ## What is sent, and when
 
 Like the browser sensor, the gem does not send one request per error:
@@ -154,7 +187,8 @@ Triage reads the server's log lines for the user action that failed. With
 
 - **What:** every line written to `Rails.logger` and `Sidekiq.logger`
   while a request or job carries a trace (`x-adt-trace` from the browser
-  sensor; a job inherits the trace of the request that enqueued it).
+  sensor; a job inherits the trace of the request that enqueued it — see
+  [Background jobs](#background-jobs)).
   Untraced lines are not kept. Rails 7.1+: a capturing logger joins
   `Rails.logger`'s broadcast (it follows the app's level and `silence`,
   and writes nothing); older Rails and `Sidekiq.logger`: a tee after the
@@ -241,6 +275,25 @@ browser already knows whether the user was shown an error; this is the one
 fact it cannot know on its own. The header carries a count and nothing else,
 and it is added even when reporting is down.
 
+## Background jobs
+
+A job inherits the trace of the request that enqueued it, so its failure
+and its log lines join the user action that caused them:
+
+- **ActiveJob, on any adapter** — Solid Queue (Rails 8's default), GoodJob,
+  Sidekiq, Resque, Delayed Job, `:async`, `:inline` and the rest. The trace
+  rides in the job's own payload (`"adt_trace"`), so it survives the queue,
+  a process restart and `retry_on`. Nothing to add: the Railtie installs it.
+  ActiveJob without Rails: `Devbench::ActiveJobHooks.install(ActiveJob::Base)`.
+- **Native Sidekiq jobs** (`Sidekiq::Job`), below.
+
+The trace is the request's, unchanged; the job's identity is its own
+(`set_user` inside the job; it ends with the job, and a worker thread's
+previous job never lends it one). A job enqueued outside a request runs
+untraced, as does one enqueued by an earlier version of this gem. On Sidekiq, an
+ActiveJob job runs inside the Sidekiq middleware's scope — traced once, not
+twice — and `:inline` runs inside the request's.
+
 ## Sidekiq
 
 Under Rails there is nothing to add: the Railtie installs the hooks at boot
@@ -269,7 +322,8 @@ use Devbench::Middleware   # Rack
 ```
 
 Everything else (`set_user`, `capture_exception`, `report_handled`, the
-DSN) works the same.
+DSN, failed and slow requests) works the same. Plain Rack has no route
+pattern, so failed and slow requests are reported under the route `*`.
 
 ## Trace propagation
 

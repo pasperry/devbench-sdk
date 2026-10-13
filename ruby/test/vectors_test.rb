@@ -54,7 +54,7 @@ class TraceVectorsTest < Minitest::Test
 end
 
 # The protocol version, shared with every SDK and ingest
-# (docs/SERVER_SDK_SPEC.md, "Protocol version"). The gem sends
+# (docs/server-sdk/protocol-version.md, "Protocol version"). The gem sends
 # PROTOCOL_VERSION as `v` in every payload (the wire tests in direct_test,
 # exceptions_test and adt_test assert that); this holds the constant to the
 # vectors, so a gem speaking a version ingest refuses cannot pass.

@@ -18,13 +18,13 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 from .trace import Trace
 
 
 class Scope:
-    __slots__ = ("trace", "user", "handled", "__weakref__")
+    __slots__ = ("trace", "user", "handled", "request", "__weakref__")
 
     def __init__(self, trace: Optional[Trace] = None) -> None:
         self.trace = trace
@@ -34,6 +34,9 @@ class Scope:
         # Failures handled during this request: the middleware turns a
         # non-zero count into the x-adt-handled response header.
         self.handled = 0
+        # The request middleware's observation (devbench._requests.Request)
+        # while a request is being observed; None in a job or a script.
+        self.request: Optional[Any] = None
 
 
 _SCOPE: "contextvars.ContextVar[Optional[Scope]]" = contextvars.ContextVar("devbench_scope", default=None)
@@ -77,6 +80,20 @@ def scoped(trace: Optional[Trace]) -> Iterator[Scope]:
         except ValueError:
             # Reset from another context (a generator finalised elsewhere):
             # fall back to clearing, never raising into the app.
+            _SCOPE.set(None)
+
+
+@contextlib.contextmanager
+def within(scope: Scope) -> Iterator[Scope]:
+    """Runs the block in an existing scope (a WSGI body closed after the
+    middleware returned), restoring whatever was there before."""
+    token = _SCOPE.set(scope)
+    try:
+        yield scope
+    finally:
+        try:
+            _SCOPE.reset(token)
+        except ValueError:
             _SCOPE.set(None)
 
 
