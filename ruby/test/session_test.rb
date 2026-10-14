@@ -1,36 +1,33 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
+require 'json'
 require 'devbench'
 
 # Devbench::Session: the token Devbench::SessionMiddleware puts in every HTML
 # page. Ingest verifies it with the Go SDK's VerifySession, so a Ruby-minted
-# token must be the bytes Go would mint. There are no shared testdata/ vectors
-# for session tokens yet (#146): KAT below is the Go SDK's own known-answer
-# table (sdk/server/go/session_kat_test.go, minted by Go); change a row only
-# together with its Go twin.
+# token must be the bytes Go would mint. Both SDKs are held to the shared
+# vectors in testdata/session_vectors.json (#181, #563; the Go side is
+# sdk/server/go/session_kat_test.go), each row with the clock pinned to its
+# own `now`. Same convention as the other vector tests: skip in a vendored
+# copy, fail when ADT_REQUIRE_VECTORS=1 (CI, and the public SDK repo's CI).
 class SessionTest < Minitest::Test
   SECRET = 'a-tenant-session-signing-secret-32b'
-  KAT_NOW = 1_700_000_000
-  KAT_EXPIRY = 1_700_003_600
+  NOW = 1_700_000_000
 
-  # [name, subject, subject as kept (at most 128 bytes, whole characters), token]
-  KAT = [
-    ['plain subject', 'user-42', 'user-42',
-     'adts1.YWNtZXwxNzAwMDAzNjAwfHVzZXItNDI.HPdOJfrw2tnU5pQmLcQ5847z3r0yZUFj5sWFUpAU0Zg'],
-    ['no subject', '', '',
-     'adts1.YWNtZXwxNzAwMDAzNjAwfA.fyO1jBICsrQrfXC_hDEAyieu2os3fSH2ZqwFUfnNSJY'],
-    ['ascii over the bound keeps 128 bytes', 'x' * 200, 'x' * 128,
-     'adts1.YWNtZXwxNzAwMDAzNjAwfHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4.c9UIiw5LEm3XVeOQOK19XVznTEAUXWbaC5SaYHfGSRg'],
-    ['two-byte characters ending on the bound', 'é' * 100, 'é' * 64,
-     'adts1.YWNtZXwxNzAwMDAzNjAwfMOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOp.4veV5h1Pe1wXkPuIvSTClWySEroW3o3rMhmYb2W5HZA'],
-    ['two-byte character straddling the bound', 'a' + ('é' * 100), 'a' + ('é' * 63),
-     'adts1.YWNtZXwxNzAwMDAzNjAwfGHDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6k.kEZibMkUk7hrvzUdgOM9ZxPMY4kDXyP_FI_5BvWZjl0'],
-    ['three-byte character straddling the bound', '€' * 60, '€' * 42,
-     'adts1.YWNtZXwxNzAwMDAzNjAwfOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrA.WVG9xXu5n2KEON0WELOMrGslRZxlUPdIF6XFODlCQ-g'],
-    ['four-byte character straddling the bound', 'a' + ('😀' * 40), 'a' + ('😀' * 31),
-     'adts1.YWNtZXwxNzAwMDAzNjAwfGHwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA.3v9yN5wgqPCZhiE0zVleLmrlcUKAPlh_waGoCy4PuWU'],
-  ].freeze
+  VECTORS_PATH = File.join(ENV['DEVBENCH_TESTDATA'] || File.expand_path('../../../../testdata', __dir__),
+                           'session_vectors.json')
+  VECTORS = File.exist?(VECTORS_PATH) ? JSON.parse(File.read(VECTORS_PATH)) : nil
+
+  def vectors(section)
+    unless VECTORS
+      flunk "missing #{VECTORS_PATH}" if ENV['ADT_REQUIRE_VECTORS'] == '1'
+      skip 'shared session vectors live in the repo (testdata/), not in a vendored gem'
+    end
+    rows = VECTORS.fetch(section)
+    refute_empty rows, "#{section} is empty; this test would prove nothing"
+    rows
+  end
 
   # The clock is the one thing faked: a token embeds its expiry, so a
   # byte-exact comparison needs a fixed now.
@@ -52,31 +49,74 @@ class SessionTest < Minitest::Test
     $VERBOSE = verbose
   end
 
-  def test_mint_matches_the_go_sdk_byte_for_byte
-    at(KAT_NOW) do
-      KAT.each do |name, subject, _kept, token|
-        assert_equal token, Devbench::Session.mint(SECRET, 'acme', subject: subject, ttl: 3600), name
+  def test_vector_constants_are_this_sdks
+    vectors('mint')
+    assert_equal Devbench::Session::MAX_SUBJECT, VECTORS.fetch('max_subject_bytes')
+    assert_equal Devbench::Session::DEFAULT_TTL, VECTORS.fetch('default_ttl_seconds')
+  end
+
+  def test_mint_vectors_are_reproduced_byte_for_byte
+    vectors('mint').each do |v|
+      at(v['now']) do
+        token = Devbench::Session.mint(v['secret'], v['tenant'], subject: v['subject'], ttl: v['ttl_seconds'])
+        assert_equal v['token'], token, "mint: #{v['name']}"
+        assert_equal v['subject_kept'].b, Devbench::Session.verify(v['secret'], token).subject.b,
+                     "subject kept: #{v['name']}"
       end
     end
   end
 
-  def test_verify_reads_back_go_minted_tokens
-    at(KAT_NOW) do
-      KAT.each do |name, _subject, kept, token|
-        got = Devbench::Session.verify(SECRET, token)
-        assert_equal 'acme', got.tenant, name
-        assert_equal kept.b, got.subject.b, name
-        assert_equal KAT_EXPIRY, got.expires.to_i, name
+  def test_refuse_vectors_are_refused
+    vectors('refuse').each do |v|
+      assert_raises(ArgumentError, "refuse: #{v['name']}") do
+        Devbench::Session.mint(v['secret'], v['tenant'], subject: v['subject'])
       end
     end
   end
 
-  # The same line Go draws: the expiry second verifies, the next one does not.
-  def test_expiry_boundary
-    token = KAT.first.last
-    at(KAT_EXPIRY) { assert_equal 'acme', Devbench::Session.verify(SECRET, token).tenant }
-    at(KAT_EXPIRY + 1) do
-      assert_raises(Devbench::Session::Expired) { Devbench::Session.verify(SECRET, token) }
+  def test_verify_vectors
+    vectors('verify').each do |v|
+      at(v['now']) do
+        case v['result']
+        when 'valid'
+          got = Devbench::Session.verify(v['secret'], v['token'])
+          claims = v.fetch('claims')
+          assert_equal [claims['tenant'], claims['subject'].b, claims['expires']],
+                       [got.tenant, got.subject.b, got.expires.to_i], "verify: #{v['name']}"
+        when 'expired'
+          assert_raises(Devbench::Session::Expired, "verify: #{v['name']}") do
+            Devbench::Session.verify(v['secret'], v['token'])
+          end
+        when 'invalid'
+          assert_raises(Devbench::Session::Invalid, "verify: #{v['name']}") do
+            Devbench::Session.verify(v['secret'], v['token'])
+          end
+        else
+          flunk "unknown result #{v['result'].inspect} in #{v['name']}"
+        end
+      end
+    end
+  end
+
+  # Go's base64.RawURLEncoding is the decoder ingest uses: a payload it
+  # refuses must be refused here too, even under a good signature. Signed
+  # with SECRET so only the payload's encoding is wrong.
+  def test_verify_refuses_payload_encodings_go_refuses
+    good = 'YWNtZXw0MTAyNDQ4NDAwfHU' # acme|4102448400|u
+    {
+      'padded' => "#{good}=",
+      'standard alphabet' => 'YWNtZXw0MTAyNDQ4NDAwfHU+',
+      'one character over' => "#{good}YW", # 25 characters
+      'embedded newline' => "YWNtZXw0\nMTAyNDQ4NDAwfHU"
+    }.each do |name, payload|
+      token = "adts1.#{payload}.#{Devbench::Session.sign(SECRET, payload)}"
+      at(NOW) { assert_raises(Devbench::Session::Invalid, name) { Devbench::Session.verify(SECRET, token) } }
+    end
+    at(NOW) do
+      token = "adts1.#{good}.#{Devbench::Session.sign(SECRET, good)}"
+      assert_equal 'u', Devbench::Session.verify(SECRET, token).subject
+      # A trailing empty part is a fourth part, as in Go's strings.Split.
+      assert_raises(Devbench::Session::Invalid) { Devbench::Session.verify(SECRET, "#{token}.") }
     end
   end
 
@@ -88,10 +128,11 @@ class SessionTest < Minitest::Test
   end
 
   def test_a_non_positive_ttl_falls_back_to_the_default
-    at(KAT_NOW) do
+    at(NOW) do
+      default = Devbench::Session.mint(SECRET, 'acme', subject: 'user-42', ttl: Devbench::Session::DEFAULT_TTL)
       [0, -60, nil].each do |ttl|
         token = Devbench::Session.mint(SECRET, 'acme', subject: 'user-42', ttl: ttl)
-        assert_equal KAT.first.last, token, "ttl #{ttl.inspect}"
+        assert_equal default, token, "ttl #{ttl.inspect}"
       end
     end
   end
@@ -141,8 +182,9 @@ class SessionTest < Minitest::Test
   # and never raises Encoding::CompatibilityError against a non-ASCII tenant
   # (the middleware would swallow that and the page would carry no token).
   def test_subject_encoding_does_not_change_the_token
-    at(KAT_NOW) do
-      _name, subject, _kept, token = KAT[4]
+    at(NOW) do
+      subject = 'a' + ('é' * 100) # cut inside a character when read as bytes
+      token = Devbench::Session.mint(SECRET, 'acme', subject: subject)
       assert_equal token, Devbench::Session.mint(SECRET, 'acme', subject: subject.b)
 
       utf8 = Devbench::Session.mint(SECRET, 'café', subject: 'josé')
@@ -165,11 +207,12 @@ class SessionTest < Minitest::Test
   end
 
   def test_middleware_injects_a_verifiable_token_into_head
-    at(KAT_NOW) do
+    at(NOW) do
       _status, headers, html = through_middleware('text/html; charset=utf-8', PAGE,
                                                   subject: ->(_env) { 'user-42' })
       token = html[/<meta name="adt-session" content="([^"]+)">/, 1]
-      assert_equal KAT.first.last, token
+      assert_equal Devbench::Session.mint(SECRET, 'acme', subject: 'user-42'), token
+      assert_equal %w[acme user-42], Devbench::Session.verify(SECRET, token).to_a.first(2)
       assert_operator html.index('adt-session'), :<, html.index('</head>')
       assert_includes html, '<title>App</title>'
       assert_equal html.bytesize.to_s, headers['Content-Length']

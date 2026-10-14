@@ -14,9 +14,9 @@ module Devbench
   # This must agree byte for byte with the Go SDK, because a token minted by a
   # Rails app is verified by ingest, which uses the Go SDK's VerifySession.
   # Divergence produces a request that succeeds locally and is rejected in
-  # production, with nothing to say why. There are no shared testdata/ vectors
-  # for session tokens yet: test/session_test.rb pins known-answer tokens the Go
-  # SDK minted, and sdk/server/go/session_kat_test.go pins the same table.
+  # production, with nothing to say why. Both SDKs are held to the shared
+  # vectors in testdata/session_vectors.json (#181, #563): test/session_test.rb
+  # here, sdk/server/go/session_kat_test.go there.
   module Session
     HEADER = 'x-adt-session'
     META_NAME = 'adt-session'
@@ -63,7 +63,9 @@ module Devbench
       raise Invalid if secret.nil? || secret.strip.empty?
       raise Invalid unless token.is_a?(String)
 
-      parts = token.strip.split('.')
+      # -1 keeps trailing empty fields, as Go's strings.Split does: without
+      # it "adts1.<payload>.<sig>." is three parts here and four in ingest.
+      parts = token.strip.split('.', -1)
       raise Invalid unless parts.length == 3 && parts[0] == PREFIX
 
       # Constant time: a signature check that leaks timing can be brute-forced
@@ -111,10 +113,16 @@ module Devbench
       Base64.urlsafe_encode64(bytes, padding: false)
     end
 
+    # Decodes as Go's base64.RawURLEncoding does, and refuses what it refuses:
+    # padding (=), the standard alphabet's + and /, whitespace, and a length
+    # that leaves one character over. (Base64.urlsafe_decode64 accepts the
+    # first two, so a padded payload verified here but not in ingest, #563.)
+    # Like Go, non-zero bits left over in the last character are ignored.
     def self.unb64(text)
-      Base64.urlsafe_decode64(text)
-    rescue ArgumentError
-      nil
+      return nil unless text.match?(/\A[A-Za-z0-9_-]*\z/) && text.length % 4 != 1
+
+      std = text.tr('-_', '+/')
+      (std + ('=' * ((4 - (std.length % 4)) % 4))).unpack1('m')
     end
   end
 end

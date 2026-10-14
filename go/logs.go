@@ -45,6 +45,9 @@ const (
 	logMaxLines     = 10000
 	logMaxBytes     = 4 << 20
 	logMaxLineBytes = 4 << 10
+	// logMaxMessageLines is how many entries one multi-line message may
+	// become; the last of them says how many lines were left out.
+	logMaxMessageLines = 50
 )
 
 // Variables so tests can shorten them.
@@ -177,6 +180,42 @@ func keep(key, text string) {
 		d := getDirect(c)
 		d.start.Do(d.launch)
 	}
+}
+
+// messageLines splits a multi-line message into the lines held for it, as
+// docs/server-sdk/configuration.md "Multi-line messages" says (#134, #557):
+// a trailing newline and a '\r' before each newline are ignored, blank
+// lines are dropped, and at most logMaxMessageLines are kept, the last
+// reading "... (k more lines)". Egress redaction folds whitespace, so an
+// entry with a newline in it would reach triage as one flattened line.
+//
+// A message with no newline is returned as is, even when empty. A message
+// with only blank lines yields none.
+func messageLines(text string) []string {
+	text = strings.TrimSuffix(text, "\n")
+	if !strings.Contains(text, "\n") {
+		return []string{text}
+	}
+	var parts []string
+	for _, part := range strings.Split(text, "\n") {
+		part = strings.TrimSuffix(part, "\r")
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		parts = append(parts, part)
+	}
+	return capMessageLines(parts)
+}
+
+// capMessageLines keeps at most logMaxMessageLines of parts, the last
+// saying how many were left out.
+func capMessageLines(parts []string) []string {
+	if len(parts) <= logMaxMessageLines {
+		return parts
+	}
+	omitted := len(parts) - (logMaxMessageLines - 1)
+	return append(parts[:logMaxMessageLines-1:logMaxMessageLines-1],
+		fmt.Sprintf("... (%d more lines)", omitted))
 }
 
 // truncateBytes cuts s to at most n bytes without splitting a UTF-8
@@ -328,39 +367,57 @@ func (h *LogHandler) Handle(ctx context.Context, r slog.Record) error {
 	return h.Handler.Handle(ctx, r)
 }
 
-// capture renders r as one line and keeps it. A panic in rendering (a
-// String method that panics, say) costs the line, never the log call.
+// capture renders r and keeps its lines. A panic in rendering (a String
+// method that panics, say) costs the record, never the log call.
 func (h *LogHandler) capture(t Trace, r slog.Record) {
 	defer func() { _ = recover() }()
-	keep(t.Key(), h.render(t, r))
+	key := t.Key()
+	for _, line := range h.render(t, r) {
+		keep(key, line)
+	}
 }
 
-// render is the captured line:
+// render is the captured lines, one per line of the message
+// (messageLines):
 //
-//	<time> <LEVEL> <message> <k=v ...> adt_trace=v1/<s>/<i>/<hop>
+//	<time> <LEVEL> <first line> <k=v ...> adt_trace=v1/<s>/<i>/<hop>
+//	<time> <LEVEL> <next line> adt_trace=v1/<s>/<i>/<hop>
 //
-// The message is written bare, so egress keeps its words (and scrubs what
-// has a sensitive shape); attribute values are quoted when they contain
-// spaces, as slog's TextHandler does, so egress treats a free-text value as
-// one value. The trace goes last; egress lifts it to the front of the line,
-// as the sidecar does.
-func (h *LogHandler) render(t Trace, r slog.Record) string {
-	var b strings.Builder
+// Every line carries the record's time, level and trace; the attributes
+// go once, on the first. The message is written bare, so egress keeps its
+// words (and scrubs what has a sensitive shape); attribute values are
+// quoted when they contain spaces, as slog's TextHandler does, so egress
+// treats a free-text value as one value. The trace goes last; egress lifts
+// it to the front of the line, as the sidecar does.
+func (h *LogHandler) render(t Trace, r slog.Record) []string {
+	var head strings.Builder
 	if !r.Time.IsZero() {
-		b.WriteString(r.Time.UTC().Format("2006-01-02T15:04:05.000Z07:00"))
-		b.WriteByte(' ')
+		head.WriteString(r.Time.UTC().Format("2006-01-02T15:04:05.000Z07:00"))
+		head.WriteByte(' ')
 	}
-	b.WriteString(r.Level.String())
-	b.WriteByte(' ')
-	b.WriteString(strings.ReplaceAll(r.Message, "\n", " "))
-	b.WriteString(h.pre)
-	r.Attrs(func(a slog.Attr) bool {
-		appendAttr(&b, h.group, a)
-		return b.Len() < logMaxLineBytes
-	})
+	head.WriteString(r.Level.String())
+	head.WriteByte(' ')
+	prefix := head.String()
 	// Bounded here rather than by add, so the trace survives a long line.
 	suffix := " adt_trace=" + t.String()
-	return truncateBytes(b.String(), logMaxLineBytes-len(suffix)) + suffix
+	limit := logMaxLineBytes - len(suffix)
+
+	parts := messageLines(r.Message)
+	out := make([]string, 0, len(parts))
+	for i, part := range parts {
+		var b strings.Builder
+		b.WriteString(prefix)
+		b.WriteString(part)
+		if i == 0 {
+			b.WriteString(h.pre)
+			r.Attrs(func(a slog.Attr) bool {
+				appendAttr(&b, h.group, a)
+				return b.Len() < logMaxLineBytes
+			})
+		}
+		out = append(out, truncateBytes(b.String(), limit)+suffix)
+	}
+	return out
 }
 
 func appendAttr(b *strings.Builder, prefix string, a slog.Attr) {
@@ -437,7 +494,9 @@ func (h *LogHandler) WithGroup(name string) slog.Handler {
 
 // LogWriter returns an io.Writer that writes everything to w unchanged and,
 // in direct mode, keeps each line that carries a trace id
-// (v1/<session>/<intent>/<hop>) under that trace:
+// (v1/<session>/<intent>/<hop>) under that trace, with the lines after it in
+// the same Write that carry no trace id of their own (the rest of a
+// multi-line message: an error and its stack, say):
 //
 //	log.SetOutput(devbench.LogWriter(os.Stderr))
 //
@@ -447,7 +506,11 @@ func (h *LogHandler) WithGroup(name string) slog.Handler {
 // with the request's context (NewLogHandler), which needs nothing in the
 // text.
 //
-// Each Write is treated as whole lines, which is how the log package writes.
+// Each Write is treated as whole lines, one message per Write, which is how
+// the log package writes. A multi-line message is held as the spec says
+// (messageLines): blank lines dropped, at most 50 lines, each continuation
+// line held as "[v1/<s>/<i>/<hop>] <line>" so it names its trace. Lines
+// before the first trace id in a Write are not kept.
 // A nil w discards (lines are still captured).
 func LogWriter(w io.Writer) io.Writer {
 	activeConfig()
@@ -468,11 +531,30 @@ func (lw *logWriter) Write(p []byte) (int, error) {
 
 var traceMarker = []byte("v1/")
 
-// captureWritten keeps the lines of p that carry a trace id.
+// captureWritten keeps the lines of p that carry a trace id, each with the
+// untraced lines that follow it in p (its continuation lines).
 func captureWritten(p []byte) {
 	defer func() { _ = recover() }()
 	if !bytes.Contains(p, traceMarker) {
 		return
+	}
+	var (
+		key, trace string
+		parts      []string // the current message's first lines; parts[0] is traced
+		total      int      // its line count, kept or not
+	)
+	flush := func() {
+		if total > logMaxMessageLines {
+			parts = append(parts[:logMaxMessageLines-1],
+				fmt.Sprintf("... (%d more lines)", total-(logMaxMessageLines-1)))
+		}
+		for i, part := range parts {
+			if i > 0 {
+				part = truncateBytes("["+trace+"] "+part, logMaxLineBytes)
+			}
+			keep(key, part)
+		}
+		parts, total = nil, 0
 	}
 	for len(p) > 0 {
 		var line []byte
@@ -482,19 +564,32 @@ func captureWritten(p []byte) {
 			line, p = p, nil
 		}
 		line = bytes.TrimRight(line, "\r")
-		if len(line) == 0 || !bytes.Contains(line, traceMarker) {
+		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
-		if len(line) > logMaxLineBytes {
-			// The trace must be found in what is kept.
-			line = []byte(truncateBytes(string(line), logMaxLineBytes))
+		var m [][]byte
+		if bytes.Contains(line, traceMarker) {
+			if len(line) > logMaxLineBytes {
+				// The trace must be found in what is kept.
+				line = []byte(truncateBytes(string(line), logMaxLineBytes))
+			}
+			m = egressTraceRe.FindSubmatch(line)
 		}
-		m := egressTraceRe.FindSubmatch(line)
-		if m == nil {
+		if m != nil {
+			flush()
+			key, trace = string(m[1])+"/"+string(m[2]), string(m[0])
+			parts, total = []string{string(line)}, 1
 			continue
 		}
-		keep(string(m[1])+"/"+string(m[2]), string(line))
+		if key == "" {
+			continue
+		}
+		// Memory stays bounded by the cap, however long the Write.
+		if total++; total <= logMaxMessageLines {
+			parts = append(parts, string(line))
+		}
 	}
+	flush()
 }
 
 // Logger returns a standard-library logger for ctx: it writes to the

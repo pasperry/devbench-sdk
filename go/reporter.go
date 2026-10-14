@@ -44,12 +44,6 @@ const (
 	// batchMax bounds how many queued reports share one connection.
 	batchMax = 256
 
-	// dialTimeout and writeTimeout (below) bound how long a wedged sidecar
-	// can hold the writer. They never touch the caller, but a short bound
-	// keeps the queue moving so a recovered sidecar sees fresh reports
-	// quickly.
-	dialTimeout = 100 * time.Millisecond
-
 	// After a failed dial the writer waits before trying again, doubling up
 	// to backoffMax, so an absent sidecar does not become a busy loop.
 	backoffMin = 10 * time.Millisecond
@@ -70,7 +64,10 @@ const (
 	maxWrite = 32 << 10
 )
 
-// writeTimeout is the deadline for each maxWrite bytes written. A variable
+// writeTimeout is the deadline for each maxWrite bytes written: it bounds how
+// long a wedged sidecar can hold the writer. It never touches the caller, but
+// a short bound keeps the queue moving so a recovered sidecar sees fresh
+// reports quickly. A variable
 // only so tests can widen it: with a deadline of seconds, a caller that
 // waited on a wedged sidecar takes seconds, which no amount of scheduler
 // noise imitates. Never changed outside tests, and only while no writer runs.
@@ -356,7 +353,15 @@ func (r *reporter) write(batch []message) (ok bool) {
 		return true
 	}
 
-	conn, err := net.DialTimeout("unix", r.path, dialTimeout)
+	// No dial deadline. A unix-socket connect never waits: it succeeds, or
+	// fails at once (no socket, nobody listening, or a full backlog:
+	// ECONNREFUSED on macOS, EAGAIN on Linux). So a deadline here bounded
+	// nothing the sidecar does, only the scheduler: Go fails a dial whose
+	// deadline has passed even when connect(2) itself succeeded, and a
+	// writer descheduled for the 100ms it used to allow lost a whole batch
+	// to a sidecar that was listening (#549). A wedged sidecar is bounded by
+	// the write deadline below, which is where a write can actually block.
+	conn, err := net.Dial("unix", r.path)
 	if err != nil {
 		r.failed(uint64(len(lines)))
 		return false

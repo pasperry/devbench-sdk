@@ -67,14 +67,29 @@ const DEPENDENCY_FRAGMENTS = [
   '/go/pkg/mod/',
   '/.bundle/',
   '<anonymous>',
+  // Python (#235): pip packages (site-packages, Debian's dist-packages) and
+  // the standard library (lib/python3.X, RHEL's lib64/python3.X); frozen
+  // stdlib modules report a file like "<frozen runpy>".
+  '/site-packages/',
+  '/dist-packages/',
+  '/lib/python3.',
+  '/lib64/python3.',
+  '<frozen ',
 ];
+
+/** .NET framework frames (#235): they ship without PDBs, so they carry no
+ *  file, only a namespace-qualified function. A prefix of the trimmed
+ *  function, so `Shop.System.Clock.Now` stays in-app. */
+const DEPENDENCY_FUNCTION_PREFIXES = ['System.', 'Microsoft.'];
 
 /** Ordered. More specific patterns run first, or a UUID decomposes into <num>s. */
 const TEMPLATE_RULES: Array<[RegExp, string]> = [
   [/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<uuid>'],
   [/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, '<ts>'],
   [/\b\d{4}-\d{2}-\d{2}\b/g, '<date>'],
-  [/\b[^\s<>@]+@[^\s<>@]+\.[A-Za-z]{2,}\b/g, '<email>'],
+  // The local part stops at `=` and `:` (#148), so `customer=sam@example.com`
+  // templates to `customer=<email>`, keeping the key. Same class as redact.ts.
+  [/\b[^\s<>@=:]+@[^\s<>@]+\.[A-Za-z]{2,}\b/g, '<email>'],
   [/\b[a-z][a-z0-9+.-]*:\/\/\S+/g, '<url>'],
   [/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, '<ip>'],
   [/\b(?:0x)?[0-9a-fA-F]{8,}\b/g, '<hex>'],
@@ -160,7 +175,9 @@ function looksLikeDigest(tok: string): boolean {
 
 function isDependencyFrame(f: Frame): boolean {
   const hay = `${f.file ?? ''} ${f.function ?? ''}`;
-  return DEPENDENCY_FRAGMENTS.some((frag) => hay.indexOf(frag) >= 0);
+  if (DEPENDENCY_FRAGMENTS.some((frag) => hay.indexOf(frag) >= 0)) return true;
+  const fn = (f.function ?? '').trim();
+  return DEPENDENCY_FUNCTION_PREFIXES.some((prefix) => fn.startsWith(prefix));
 }
 
 function normalizeFrames(frames: Frame[] | undefined): string[] {

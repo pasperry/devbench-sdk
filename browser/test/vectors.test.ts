@@ -15,8 +15,19 @@ interface Vector {
 
 const here = dirname(fileURLToPath(import.meta.url));
 // DEVBENCH_TESTDATA: the public SDK repo's CI, whose layout differs.
-const vectorsPath = resolve(process.env.DEVBENCH_TESTDATA ?? resolve(here, '../../../testdata'), 'fingerprint_vectors.json');
-const vectors: Vector[] = JSON.parse(readFileSync(vectorsPath, 'utf8'));
+const testdata = process.env.DEVBENCH_TESTDATA ?? resolve(here, '../../../testdata');
+const readVectors = (file: string): Vector[] => JSON.parse(readFileSync(resolve(testdata, file), 'utf8'));
+const vectors = readVectors('fingerprint_vectors.json');
+// fingerprint_vectors_next.json stages rule changes in the same shape (#235:
+// Python and .NET dependency frames) until every SDK reads it; its entries
+// then move into fingerprint_vectors.json. Both are required.
+const vectorFiles: Array<[string, Vector[]]> = [
+  ['fingerprint_vectors.json', vectors],
+  ['fingerprint_vectors_next.json', readVectors('fingerprint_vectors_next.json')],
+];
+const templateVectors: { template: Array<{ name: string; in: string; out: string }> } = JSON.parse(
+  readFileSync(resolve(testdata, 'template_vectors.json'), 'utf8'),
+);
 
 /**
  * The cross-implementation contract (docs/server-sdk/conformance.md, "Conformance").
@@ -26,18 +37,31 @@ const vectors: Vector[] = JSON.parse(readFileSync(vectorsPath, 'utf8'));
  * problems: triage cost doubles and one issue splits in half with neither half
  * showing its true impact.
  */
-test('fingerprint vectors match the Go implementation exactly', () => {
-  assert.ok(vectors.length > 0, 'vector file is empty');
+for (const [file, fileVectors] of vectorFiles) {
+  test(`fingerprint vectors match the Go implementation exactly (${file})`, () => {
+    assert.ok(fileVectors.length > 0, `${file} is empty`);
 
-  for (const v of vectors) {
-    const got = compute(v.signal);
-    assert.equal(
-      got.fp,
-      v.expected_fp,
-      `vector ${v.name}: fingerprint mismatch\n  go: ${v.expected_fp}\n  ts: ${got.fp}\n` +
-        `  go normalized: ${JSON.stringify(v.normalized)}\n  ts normalized: ${JSON.stringify(got.normalized)}`,
-    );
-    assert.deepEqual(got.normalized, v.normalized, `vector ${v.name}: normalized form differs`);
+    for (const v of fileVectors) {
+      const got = compute(v.signal);
+      assert.equal(
+        got.fp,
+        v.expected_fp,
+        `${file}: vector ${v.name}: fingerprint mismatch\n  go: ${v.expected_fp}\n  ts: ${got.fp}\n` +
+          `  go normalized: ${JSON.stringify(v.normalized)}\n  ts normalized: ${JSON.stringify(got.normalized)}`,
+      );
+      assert.deepEqual(got.normalized, v.normalized, `${file}: vector ${v.name}: normalized form differs`);
+    }
+  });
+}
+
+// The template is the message part of every fingerprint, so a templating
+// divergence splits one problem in two (testdata/template_vectors.json,
+// message in, template out). Each case pins one message, so a failure names
+// the rule that drifted (#148: `customer=sam@example.com` -> `customer=<email>`).
+test('template vectors match the Go implementation exactly', () => {
+  assert.ok(templateVectors.template.length > 0, 'no template vectors; this test proves nothing');
+  for (const v of templateVectors.template) {
+    assert.equal(template(v.in), v.out, `template: ${v.name}: ${v.in}`);
   }
 });
 

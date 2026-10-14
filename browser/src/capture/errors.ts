@@ -9,7 +9,7 @@
  * silent failures this product exists to find.
  */
 import { safeVoid } from './../safe.js';
-import type { Frame } from './../fingerprint.js';
+import { template, type Frame } from './../fingerprint.js';
 import type { Sensor } from './../sensor.js';
 import { installNetworkCapture, type NetworkCaptureTargets } from './network.js';
 import { installVitalsCapture, type VitalsCaptureTargets } from './vitals.js';
@@ -34,6 +34,31 @@ export function parseStack(stack: string | undefined): Frame[] {
     if (out.length >= 20) break;
   }
   return out;
+}
+
+/** Letters of any script with letters; leaves out digits, punctuation and
+ *  the symbol blocks banners are drawn with (U+0080–U+00BF, U+2000–U+2BFF:
+ *  box drawing, blocks, arrows, dashes) and emoji (surrogate pairs). ES2017
+ *  has no \p{L}. */
+const LETTER = /[A-Za-z\u00C0-\u1FFF\u2C00-\uD7FF]/;
+/** A template hole such as <num>, <uuid>, <str>. */
+const HOLE = /<[a-z]+>/g;
+/** `String(x)` of a non-Error object: `[object Event]`, `[object Object]`. */
+const OBJECT_TAGS = /^\[object [A-Za-z0-9_$]*\](?: \[object [A-Za-z0-9_$]*\])*$/;
+/** A bare code: `Error code: 31005`, `Error: 20101`, `code 31009`. */
+const BARE_CODE = /^(?:err(?:or)?\s*)?(?:code|status|errno)?\s*[:#=-]?\s*<num>\.?$/i;
+
+/**
+ * True for a console.error line with nothing in it to tell one incident from
+ * another (#518): no letters once its values are holed (banners of `=`,
+ * an empty call), only `[object <Name>]`, or a bare code (`Error code: N`,
+ * where the number is a hole). Fingerprinted, every such line from every
+ * incident counts as one problem; the incident's other lines still record it.
+ */
+export function isContentFreeConsoleLine(message: string): boolean {
+  const t = template(message);
+  if (!LETTER.test(t.replace(HOLE, ' '))) return true;
+  return OBJECT_TAGS.test(t) || BARE_CODE.test(t);
 }
 
 export interface ErrorCaptureTargets extends NetworkCaptureTargets, VitalsCaptureTargets {
@@ -89,12 +114,11 @@ export function installErrorCapture(sensor: Sensor, target: ErrorCaptureTargets)
           if (sensor.isConsoleMuted()) return;
           const first = args[0];
           const err = first instanceof Error ? first : undefined;
-          sensor.record(
-            'error',
-            err?.name ?? 'ConsoleError',
-            err?.message ?? args.map((a) => String(a)).join(' '),
-            parseStack(err?.stack),
-          );
+          const message = err?.message ?? args.map((a) => String(a)).join(' ');
+          // Content-free lines (#518) are dropped: they would merge unrelated
+          // incidents into one fingerprint. An Error keeps its name and stack.
+          if (!err && isContentFreeConsoleLine(message)) return;
+          sensor.record('error', err?.name ?? 'ConsoleError', message, parseStack(err?.stack));
         });
       };
       teardown.push(() => {

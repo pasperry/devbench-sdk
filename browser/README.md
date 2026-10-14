@@ -13,7 +13,7 @@ layout). The rest of this section is for any other web app.
 **One script tag.** Put it before your app's scripts:
 
 ```html
-<script src="https://unpkg.com/devbench@0.8.0/dist/devbench.min.js"
+<script src="https://unpkg.com/devbench@0.8.1/dist/devbench.min.js"
         data-dsn="https://<public key>@adt-ingest.onrender.com"
         data-release="<build sha>"></script>
 ```
@@ -21,7 +21,7 @@ layout). The rest of this section is for any other web app.
 That is the whole install: the bundle reads `data-dsn` from its own tag and
 calls `Devbench.init` itself. `data-release` is optional. Without `data-dsn`
 the tag does nothing but define `Devbench`. (jsDelivr works the same:
-`https://cdn.jsdelivr.net/npm/devbench@0.8.0/dist/devbench.min.js`. Serving
+`https://cdn.jsdelivr.net/npm/devbench@0.8.1/dist/devbench.min.js`. Serving
 the file yourself works too — copy `dist/devbench.min.js`.)
 
 **Or npm, and one call:**
@@ -142,8 +142,10 @@ or `Devbench.init({ dsn, widgetIdentity })`, or later
 
 ## What is captured automatically
 
-**Errors.** Uncaught errors, unhandled rejections, `console.error`,
-and every `fetch` and `XMLHttpRequest` that fails: a response of 400 or more,
+**Errors.** Uncaught errors, unhandled rejections, `console.error`
+(except lines with nothing in them to tell incidents apart: a banner of
+`=` signs, `[object Event]`, a bare `Error code: 31005`; your console
+still shows them), and every `fetch` and `XMLHttpRequest` that fails: a response of 400 or more,
 or no response at all (an abort the app asked for is not a failure). A
 success carrying `x-adt-handled` from a server SDK is a silent failure. With
 AngularJS, `$http` adds intents, trace headers and write-then-readback, and

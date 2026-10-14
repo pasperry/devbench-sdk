@@ -45,7 +45,10 @@ var scrubRules = []scrubRule{
 	subRule(regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), `<redacted:aws-key>`),
 	subRule(regexp.MustCompile(`(?i)\b(password|passwd|pwd|secret|api[_\-]?key|access[_\-]?token|refresh[_\-]?token|client[_\-]?secret|private[_\-]?key|session[_\-]?id|csrf[_\-]?token)(\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)`),
 		`${1}${2}<redacted:secret>`),
-	subRule(regexp.MustCompile(`\b[^\s<>@]+@[^\s<>@]+\.[A-Za-z]{2,}\b`), `<redacted:email>`),
+	// The local part stops at `=` and `:` (#148), so `customer=sam@x.com`
+	// keeps its key: `customer=<redacted:email>`. Same class as the
+	// template's email rule (fingerprint.go) and internal/scrub.
+	subRule(regexp.MustCompile(`\b[^\s<>@=:]+@[^\s<>@]+\.[A-Za-z]{2,}\b`), `<redacted:email>`),
 	subRule(regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`), `<redacted:ssn>`),
 	redactCards,
 	subRule(regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`), `<redacted:ip>`),

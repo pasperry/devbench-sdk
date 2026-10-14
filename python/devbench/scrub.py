@@ -104,7 +104,10 @@ RULES = [
            r"client[_\-]?secret|private[_\-]?key|session[_\-]?id|csrf[_\-]?token)"
            "(" + WS + "*[:=]" + WS + "*)(\"[^\"]*\"|'[^']*'|" + NOT_WS + "+)", re.IGNORECASE),
      r"\g<1>\g<2><redacted:secret>"),
-    (go_re(r"\b[^\t\n\f\r <>@]+@[^\t\n\f\r <>@]+\.[A-Za-z]{2,}\b"), "<redacted:email>"),
+    # The local part stops at `=` and `:` (#148): without that it starts at
+    # the key, and `customer=sam@example.com` or `"email":"sam@..."` loses
+    # the key that says which field held the address.
+    (go_re(r"\b[^\t\n\f\r <>@=:]+@[^\t\n\f\r <>@]+\.[A-Za-z]{2,}\b"), "<redacted:email>"),
     (go_re(r"\b\d{3}-\d{2}-\d{4}\b"), "<redacted:ssn>"),
     # The card and phone rules (#186) judge each candidate in the callback.
     (CARD_CANDIDATE, lambda m: CARD if _is_card(m.group(0)) else m.group(0)),

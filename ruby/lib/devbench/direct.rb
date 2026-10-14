@@ -126,13 +126,12 @@ module Devbench
       @lock.synchronize { @window.transform_values { |c| c.n } }
     end
 
-    # rake devbench:test. Sends one synthetic exception straight to ingest
-    # (not via the background thread), uploads its evidence if asked, and
-    # prints what happened. Returns true when ingest accepted it.
-    # The self-test (Devbench.test!): asks ingest whether this DSN's key is
-    # valid, and for which tenant and environment. Creates nothing — it used
-    # to send a synthetic exception, which became a real issue on a new
-    # customer's punch list.
+    # The self-test behind `rake devbench:test` (Devbench.test!): POSTs
+    # /v1/check straight to ingest (not via the background thread) to ask
+    # whether this DSN's key is valid, and for which tenant and environment,
+    # and prints the answer. Returns true when ingest accepted the key.
+    # Creates nothing — it used to send a synthetic exception, which became a
+    # real issue on a new customer's punch list.
     def self_test(io)
       io.puts "Dev Bench: checking the DSN against #{@dsn} (service #{@service.inspect})"
       response, error = attempt(:post, @check_uri, '{}', flush_headers, HTTP_TIMEOUT)

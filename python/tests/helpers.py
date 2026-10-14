@@ -15,7 +15,9 @@ import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import ThreadingMixIn
 from typing import Any, Callable, Dict, List, Optional
+from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # DEVBENCH_TESTDATA: the public SDK repo's CI, whose layout differs.
@@ -55,6 +57,21 @@ class Request:
 
     def json(self) -> Any:
         return json.loads(self.body.decode("utf-8"))
+
+
+# LISTEN_BACKLOG is every test server's accept queue, above any test's
+# concurrent clients (#528). socketserver's default is 5: with more clients
+# than that connecting while the accept loop is behind (a loaded machine, the
+# GIL), the kernel drops SYNs, and a client whose retransmits keep landing on
+# the full queue fails its connect with ETIMEDOUT after about 8 s on macOS:
+# TimeoutError(60, 'Operation timed out'), which no assertion of the test
+# under way has anything to do with. With room for every client, a connect is
+# admitted by the kernel whatever the accept loop is doing.
+LISTEN_BACKLOG = 128
+
+
+class _IngestServer(ThreadingHTTPServer):
+    request_queue_size = LISTEN_BACKLOG
 
 
 class FakeIngest:
@@ -113,7 +130,7 @@ class FakeIngest:
                 ingest._record(req)
                 self._answer(200, {})
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = _IngestServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -210,20 +227,20 @@ def http(method: str, url: str, headers: Optional[Dict[str, str]] = None, body: 
         return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read()
 
 
+class WSGITestServer(ThreadingMixIn, WSGIServer):
+    """serve_wsgi's server: a thread per request, and LISTEN_BACKLOG."""
+    daemon_threads = True
+    request_queue_size = LISTEN_BACKLOG
+
+
 def serve_wsgi(app: Any) -> "tuple[str, Callable[[], None]]":
     """Serves a WSGI app over real HTTP on 127.0.0.1 in a thread. Returns the
     base URL and a stop function."""
-    from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
-    from socketserver import ThreadingMixIn
-
-    class Server(ThreadingMixIn, WSGIServer):
-        daemon_threads = True
-
     class Quiet(WSGIRequestHandler):
         def log_message(self, *args: Any) -> None:
             pass
 
-    server = make_server("127.0.0.1", 0, app, server_class=Server, handler_class=Quiet)
+    server = make_server("127.0.0.1", 0, app, server_class=WSGITestServer, handler_class=Quiet)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 

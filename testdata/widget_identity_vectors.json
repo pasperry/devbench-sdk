@@ -311,6 +311,38 @@
       "chat": null
     },
     {
+      "name": "NUL at the end of the account (Ruby's String#strip drops it)",
+      "secret": "dbws_k7x2m4q9r3t6v8w1y5z0a2b4c6d8e0f1g3h5j7k9m2n4p6q8",
+      "email": "pat@dealer.com",
+      "account": "dealer-1182\u0000",
+      "role": "",
+      "chat": null
+    },
+    {
+      "name": "tab inside the email",
+      "secret": "dbws_k7x2m4q9r3t6v8w1y5z0a2b4c6d8e0f1g3h5j7k9m2n4p6q8",
+      "email": "pat\t@dealer.com",
+      "account": "dealer-1182",
+      "role": "",
+      "chat": null
+    },
+    {
+      "name": "DEL inside the role",
+      "secret": "dbws_k7x2m4q9r3t6v8w1y5z0a2b4c6d8e0f1g3h5j7k9m2n4p6q8",
+      "email": "pat@dealer.com",
+      "account": "dealer-1182",
+      "role": "adminowner",
+      "chat": null
+    },
+    {
+      "name": "U+001F at the end of the email (Python's str.strip drops it)",
+      "secret": "dbws_k7x2m4q9r3t6v8w1y5z0a2b4c6d8e0f1g3h5j7k9m2n4p6q8",
+      "email": "pat@dealer.com\u001f",
+      "account": "dealer-1182",
+      "role": "",
+      "chat": null
+    },
+    {
       "name": "256-character account",
       "secret": "dbws_k7x2m4q9r3t6v8w1y5z0a2b4c6d8e0f1g3h5j7k9m2n4p6q8",
       "email": "pat@dealer.com",

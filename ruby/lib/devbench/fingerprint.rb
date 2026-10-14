@@ -39,7 +39,9 @@ module Devbench
       [go_re('\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', Regexp::IGNORECASE), '<uuid>'],
       [go_re('\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?'), '<ts>'],
       [go_re('\b\d{4}-\d{2}-\d{2}\b'), '<date>'],
-      [go_re('\b[^\t\n\f\r <>@]+@[^\t\n\f\r <>@]+\.[A-Za-z]{2,}\b'), '<email>'],
+      # The local part stops at `=` and `:` (#148): `customer=sam@x.com`
+      # templates to `customer=<email>`. Same class as Scrub's email rule.
+      [go_re('\b[^\t\n\f\r <>@=:]+@[^\t\n\f\r <>@]+\.[A-Za-z]{2,}\b'), '<email>'],
       [go_re("\\b[a-z][a-z0-9+.-]*://#{GO_NOT_WS}+"), '<url>'],
       [go_re('\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'), '<ip>'],
       [go_re('\b(?:0x)?[0-9a-fA-F]{8,}\b'), '<hex>'],
@@ -55,8 +57,17 @@ module Devbench
 
     DEPENDENCY_FRAGMENTS = [
       '/node_modules/', '/vendor/', '/gems/', '/ruby/gems/', '/usr/local/go/src/',
-      '/go/pkg/mod/', '/.bundle/', '<anonymous>'
+      '/go/pkg/mod/', '/.bundle/', '<anonymous>',
+      # Python (#235): pip packages (site-packages, Debian's dist-packages)
+      # and the standard library (lib/python3.X, RHEL's lib64/python3.X);
+      # frozen stdlib modules report a file like "<frozen runpy>".
+      '/site-packages/', '/dist-packages/', '/lib/python3.', '/lib64/python3.', '<frozen '
     ].freeze
+
+    # .NET framework frames (#235) ship without PDBs: no file, only a
+    # namespace-qualified function. A prefix of the trimmed function, so
+    # `Shop.System.Clock.Now` stays in-app.
+    DEPENDENCY_FUNCTION_PREFIXES = ['System.', 'Microsoft.'].freeze
 
     ASSET_DIGEST = /\A(.+)[-.]([A-Za-z0-9_]{8,})((?:\.chunk|\.bundle)?\.(?:js|mjs|cjs|css)(?:\.map)?)\z/
 
@@ -145,7 +156,10 @@ module Devbench
 
       def dependency?(file, function)
         hay = "#{file} #{function}"
-        DEPENDENCY_FRAGMENTS.any? { |frag| hay.include?(frag) }
+        return true if DEPENDENCY_FRAGMENTS.any? { |frag| hay.include?(frag) }
+
+        fn = trim(function)
+        DEPENDENCY_FUNCTION_PREFIXES.any? { |prefix| fn.start_with?(prefix) }
       end
 
       def strip_asset_digest(name)

@@ -1,0 +1,362 @@
+{
+  "_comment": "Shared adts1 session-token vectors (#181). Generated from the Go SDK by internal/ingest/session_vectors_test.go (go test ./internal/ingest -run TestSessionVectors -update-session-vectors). mint: MintSession(secret, tenant, subject, ttl_seconds) with the clock at now must return token byte for byte, and the token's subject is subject_kept. refuse: MintSession must refuse. verify: VerifySession(secret, token) with the clock at now returns result: valid (reading back claims), expired or invalid.",
+  "format": "adts1.<payload>.<sig>; payload = base64url without padding of the bytes tenant|expiry|subject (expiry = now + ttl, unix seconds in decimal; ttl <= 0 means default_ttl_seconds; subject cut to at most max_subject_bytes without splitting a UTF-8 character, then a | in tenant or subject is refused); sig = base64url without padding of HMAC-SHA256(secret, payload as written). Verify: trim the token, three parts, prefix adts1, constant-time signature check, payload decodes (no padding), split into at most three fields on |, expiry a decimal integer, then expired only when now > expiry.",
+  "max_subject_bytes": 128,
+  "default_ttl_seconds": 3600,
+  "mint": [
+    {
+      "name": "plain subject",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "user-42",
+      "now": 4102444800,
+      "ttl_seconds": 3600,
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBc",
+      "subject_kept": "user-42"
+    },
+    {
+      "name": "no subject",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "",
+      "now": 4102444800,
+      "ttl_seconds": 3600,
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfA.mmNph40Uesac6BviACtHxL09E8jHlvzv-T2GHOq7vxU",
+      "subject_kept": ""
+    },
+    {
+      "name": "non-ASCII subject under the bound",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "josé",
+      "now": 4102444800,
+      "ttl_seconds": 3600,
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfGpvc8Op.lR8N9Kh5h_p4BIG_ju9-sjH9jI2gPcSTna50ncXAaL4",
+      "subject_kept": "josé"
+    },
+    {
+      "name": "dots and spaces are plain data",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme-prod",
+      "subject": "a.b c",
+      "now": 4102444800,
+      "ttl_seconds": 3600,
+      "token": "adts1.YWNtZS1wcm9kfDQxMDI0NDg0MDB8YS5iIGM.LYKA_NM9e2RhyybMEWO_XCr6Yiy4X6NQ6TXyB_-Ftd4",
+      "subject_kept": "a.b c"
+    },
+    {
+      "name": "exactly 128 bytes is kept whole",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "now": 4102444800,
+      "ttl_seconds": 3600,
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4.MDid-47jB1OmGY82YpqAFZ7Qe8KgCMtxP11sBKjezG4",
+      "subject_kept": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "name": "ascii over the bound keeps 128 bytes",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "now": 4102444800,
+      "ttl_seconds": 3600,
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4.MDid-47jB1OmGY82YpqAFZ7Qe8KgCMtxP11sBKjezG4",
+      "subject_kept": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "name": "two-byte characters ending on the bound",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "now": 4102444800,
+      "ttl_seconds": 3600,
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfMOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOp.M61Q2GQSusf-bVXygikZBhUVgPR2qQtcbcfo7wsPzdU",
+      "subject_kept": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+    },
+    {
+      "name": "two-byte character straddling the bound",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "aéééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "now": 4102444800,
+      "ttl_seconds": 3600,
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfGHDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6k.-4jliqmjMDsQCu919ZCExiU8gqzNr2fpfx6kwbZ9hcY",
+      "subject_kept": "aééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+    },
+    {
+      "name": "three-byte character straddling the bound",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€",
+      "now": 4102444800,
+      "ttl_seconds": 3600,
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrA.tkWYfkMydVuo3iZRU_6H2utjQZ1WYcufEGQ9fU_gcjM",
+      "subject_kept": "€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€"
+    },
+    {
+      "name": "four-byte character straddling the bound",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "a😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "now": 4102444800,
+      "ttl_seconds": 3600,
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfGHwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA.WLleK5GPAcvFOSO26kFzqja_1KvTJJmBQxiaCFAnE7E",
+      "subject_kept": "a😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    },
+    {
+      "name": "a pipe beyond the bound is truncated away",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx|acme-evil",
+      "now": 4102444800,
+      "ttl_seconds": 3600,
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4.MDid-47jB1OmGY82YpqAFZ7Qe8KgCMtxP11sBKjezG4",
+      "subject_kept": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "name": "ttl 0 falls back to the default",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "user-42",
+      "now": 4102444800,
+      "ttl_seconds": 0,
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBc",
+      "subject_kept": "user-42"
+    },
+    {
+      "name": "ttl -5 falls back to the default",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "user-42",
+      "now": 4102444800,
+      "ttl_seconds": -5,
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBc",
+      "subject_kept": "user-42"
+    }
+  ],
+  "refuse": [
+    {
+      "name": "no secret",
+      "secret": "",
+      "tenant": "acme",
+      "subject": "user-42"
+    },
+    {
+      "name": "whitespace secret",
+      "secret": "  \t",
+      "tenant": "acme",
+      "subject": "user-42"
+    },
+    {
+      "name": "no tenant",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "",
+      "subject": "user-42"
+    },
+    {
+      "name": "whitespace tenant",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": " ",
+      "subject": "user-42"
+    },
+    {
+      "name": "pipe in the tenant",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme|evil",
+      "subject": ""
+    },
+    {
+      "name": "pipe in the subject",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "tenant": "acme",
+      "subject": "user|acme-evil"
+    }
+  ],
+  "verify": [
+    {
+      "name": "genuine",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBc",
+      "now": 4102444800,
+      "result": "valid",
+      "claims": {
+        "tenant": "acme",
+        "subject": "user-42",
+        "expires": 4102448400
+      }
+    },
+    {
+      "name": "genuine, no subject",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfA.mmNph40Uesac6BviACtHxL09E8jHlvzv-T2GHOq7vxU",
+      "now": 4102444800,
+      "result": "valid",
+      "claims": {
+        "tenant": "acme",
+        "subject": "",
+        "expires": 4102448400
+      }
+    },
+    {
+      "name": "a truncated subject reads back as kept",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfGHwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA.WLleK5GPAcvFOSO26kFzqja_1KvTJJmBQxiaCFAnE7E",
+      "now": 4102444800,
+      "result": "valid",
+      "claims": {
+        "tenant": "acme",
+        "subject": "a😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+        "expires": 4102448400
+      }
+    },
+    {
+      "name": "surrounding whitespace is trimmed",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": " \tadts1.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBc\n",
+      "now": 4102444800,
+      "result": "valid",
+      "claims": {
+        "tenant": "acme",
+        "subject": "user-42",
+        "expires": 4102448400
+      }
+    },
+    {
+      "name": "at the expiry second",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXwxNzAwMDAzNjAwfHVzZXItNDI.HPdOJfrw2tnU5pQmLcQ5847z3r0yZUFj5sWFUpAU0Zg",
+      "now": 1700003600,
+      "result": "valid",
+      "claims": {
+        "tenant": "acme",
+        "subject": "user-42",
+        "expires": 1700003600
+      }
+    },
+    {
+      "name": "one second past expiry",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXwxNzAwMDAzNjAwfHVzZXItNDI.HPdOJfrw2tnU5pQmLcQ5847z3r0yZUFj5sWFUpAU0Zg",
+      "now": 1700003601,
+      "result": "expired"
+    },
+    {
+      "name": "an expired token with a wrong secret is invalid, not expired",
+      "secret": "another-tenants-session-secret-32b",
+      "token": "adts1.YWNtZXwxNzAwMDAzNjAwfHVzZXItNDI.HPdOJfrw2tnU5pQmLcQ5847z3r0yZUFj5sWFUpAU0Zg",
+      "now": 1700003601,
+      "result": "invalid"
+    },
+    {
+      "name": "another tenant's secret",
+      "secret": "another-tenants-session-secret-32b",
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBc",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "empty secret",
+      "secret": "",
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBc",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "signature altered",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBA",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "payload swapped for another tenant's, signature kept",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZS1ldmlsfDQxMDI0NDg0MDB8dXNlci00Mg.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBc",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "signature padded with =",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBc=",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "wrong prefix",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts2.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBc",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "prefix in the wrong case",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "ADTS1.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBc",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "four parts",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI.l4pjftYiq3nbo7MvcZUeHjT_bXBZ7ryMFWT1eoE4eBc.x",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "two parts",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHVzZXItNDI",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "empty token",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "signed, but the payload is padded base64",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfHU=.6xezdxC2oIscZu2qluVdwUBqzABJZcZaE-mQtb32FsA",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "signed, but the payload is not base64url",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.acme|4102448400|u.ecJjInQtqMqKaXUSe28GQACGTCDMl5DP_JIRSbU19MM",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "signed, but only two fields",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAw.LD5Lhx9HWj_LctWZiT_JCgosN-HxCDIPbVNWUDR5uvg",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "signed, but the expiry is not a number",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXxzb29ufHVzZXItNDI.RyVBN7DZT5haH3Tpea8wFaYD_zApVKSgGTIQSrhaKuc",
+      "now": 4102444800,
+      "result": "invalid"
+    },
+    {
+      "name": "signed with a pipe in the subject field: it is part of the subject",
+      "secret": "a-tenant-session-signing-secret-32b",
+      "token": "adts1.YWNtZXw0MTAyNDQ4NDAwfGF8Yg.DMjwd_JwdqhhmPCKC4mF0GmVokYlRHEaRjkWFHkt1u8",
+      "now": 4102444800,
+      "result": "valid",
+      "claims": {
+        "tenant": "acme",
+        "subject": "a|b",
+        "expires": 4102448400
+      }
+    }
+  ]
+}

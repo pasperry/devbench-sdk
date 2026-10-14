@@ -182,11 +182,131 @@ func TestCapture_LogWriterKeepsTracedLinesAndWritesEverything(t *testing.T) {
 		!strings.Contains(got[0], "charging card for deal 9912") || !strings.Contains(got[1], "Logger-style") {
 		t.Errorf("sessCap/actCap holds %q", got)
 	}
-	if got := held("sessW/actW"); len(got) != 2 || strings.HasSuffix(got[1], "\r") {
-		t.Errorf("sessW/actW holds %q, want both lines without their line endings", got)
+	// "plain" follows a traced line in the same Write: it is that message's
+	// continuation line (#557).
+	if got := held("sessW/actW"); len(got) != 3 || strings.HasSuffix(got[1], "\r") ||
+		got[2] != "[v1/sessW/actW/1] plain" {
+		t.Errorf("sessW/actW holds %q, want both traced lines without their line endings, then plain", got)
 	}
-	if n, _ := captured.stats(); n != 4 {
-		t.Errorf("store holds %d lines, want the 4 traced ones", n)
+	if n, _ := captured.stats(); n != 5 {
+		t.Errorf("store holds %d lines, want the 4 traced ones and 1 continuation", n)
+	}
+}
+
+// A multi-line slog message is held as one entry per line (#134, #557):
+// docs/server-sdk/configuration.md "Multi-line messages".
+func TestCapture_SlogMultiLineMessageIsOneEntryPerLine(t *testing.T) {
+	useCapture(t)
+	logger := slog.New(NewLogHandler(slog.NewTextHandler(io.Discard, nil)))
+	ctx := WithTrace(context.Background(), Trace{Session: "sessM", Intent: "actM", Hop: 4})
+
+	logger.ErrorContext(ctx, "boom: nil map\r\n  at charge (billing.go:12)\n\n   \n  at main (main.go:3)\n", "deal", 9912)
+
+	got := held("sessM/actM")
+	want := []string{
+		"ERROR boom: nil map deal=9912 adt_trace=v1/sessM/actM/4",
+		"ERROR   at charge (billing.go:12) adt_trace=v1/sessM/actM/4",
+		"ERROR   at main (main.go:3) adt_trace=v1/sessM/actM/4",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("held %d entries, want %d: %q", len(got), len(want), got)
+	}
+	for i := range want {
+		if strings.Contains(got[i], "\n") || !strings.HasSuffix(got[i], want[i]) {
+			t.Errorf("entry %d = %q, want it to end %q", i, got[i], want[i])
+		}
+		// Every entry carries the record's time prefix, not only the first.
+		if !strings.HasPrefix(got[i], "20") {
+			t.Errorf("entry %d = %q, want the record's time first", i, got[i])
+		}
+	}
+
+	// Only blank lines: nothing held. One line with no newline is held as
+	// before, even when empty.
+	captured.reset()
+	logger.InfoContext(ctx, "\n  \n\r\n")
+	if got := held("sessM/actM"); len(got) != 0 {
+		t.Errorf("an all-blank message held %q", got)
+	}
+	logger.InfoContext(ctx, "single line\n")
+	if got := held("sessM/actM"); len(got) != 1 || !strings.HasSuffix(got[0], "INFO single line adt_trace=v1/sessM/actM/4") {
+		t.Errorf("a message with only a trailing newline held %q", got)
+	}
+}
+
+func TestCapture_SlogMultiLineMessageIsCappedAt50(t *testing.T) {
+	useCapture(t)
+	logger := slog.New(NewLogHandler(slog.NewTextHandler(io.Discard, nil)))
+	ctx := WithTrace(context.Background(), Trace{Session: "sessC", Intent: "actC", Hop: 0})
+
+	var msg strings.Builder
+	for i := 1; i <= 120; i++ {
+		fmt.Fprintf(&msg, "frame %d\n", i)
+	}
+	logger.ErrorContext(ctx, msg.String())
+
+	got := held("sessC/actC")
+	if len(got) != 50 {
+		t.Fatalf("held %d entries, want 50", len(got))
+	}
+	if !strings.HasSuffix(got[48], "ERROR frame 49 adt_trace=v1/sessC/actC/0") {
+		t.Errorf("entry 49 = %q", got[48])
+	}
+	if !strings.HasSuffix(got[49], "ERROR ... (71 more lines) adt_trace=v1/sessC/actC/0") {
+		t.Errorf("entry 50 = %q, want the omitted count", got[49])
+	}
+
+	// Exactly 50 lines: all kept, no marker.
+	captured.reset()
+	msg.Reset()
+	for i := 1; i <= 50; i++ {
+		fmt.Fprintf(&msg, "frame %d\n", i)
+	}
+	logger.ErrorContext(ctx, msg.String())
+	if got := held("sessC/actC"); len(got) != 50 || !strings.HasSuffix(got[49], "ERROR frame 50 adt_trace=v1/sessC/actC/0") {
+		t.Errorf("a 50-line message held %d entries, last %q", len(got), got[len(got)-1])
+	}
+}
+
+// A traced multi-line log.Print (an error and its stack): continuation lines
+// are held under the trace of the line that starts the message, blank lines
+// dropped, at most 50 (#557).
+func TestCapture_LogWriterHoldsContinuationLines(t *testing.T) {
+	useCapture(t)
+	var out bytes.Buffer
+	prevW, prevF := log.Writer(), log.Flags()
+	log.SetOutput(LogWriter(&out))
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(prevW); log.SetFlags(prevF) })
+
+	ctx := WithTrace(context.Background(), Trace{Session: "sessS", Intent: "actS", Hop: 1})
+	Logger(ctx).Printf("charge failed: timeout\n\tat charge()\r\n\n\tat main()")
+	log.Printf("untraced first line\nand its continuation")
+
+	want := []string{
+		"[v1/sessS/actS/1] charge failed: timeout",
+		"[v1/sessS/actS/1] \tat charge()",
+		"[v1/sessS/actS/1] \tat main()",
+	}
+	got := held("sessS/actS")
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("held %q, want %q", got, want)
+	}
+	if n, _ := captured.stats(); n != 3 {
+		t.Errorf("store holds %d lines, want 3 (an untraced message is not kept)", n)
+	}
+
+	captured.reset()
+	var msg strings.Builder
+	for i := 1; i <= 120; i++ {
+		fmt.Fprintf(&msg, "\nframe %d", i)
+	}
+	Logger(ctx).Print("head" + msg.String())
+	got = held("sessS/actS")
+	if len(got) != 50 || got[0] != "[v1/sessS/actS/1] head" ||
+		got[48] != "[v1/sessS/actS/1] frame 48" || got[49] != "[v1/sessS/actS/1] ... (72 more lines)" {
+		t.Errorf("a 121-line message held %d lines: first %q, 49th %q, last %q",
+			len(got), got[0], got[min(48, len(got)-1)], got[len(got)-1])
 	}
 }
 

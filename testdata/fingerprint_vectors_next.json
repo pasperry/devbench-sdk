@@ -1,0 +1,246 @@
+[
+  {
+    "name": "python-library-innermost",
+    "signal": {
+      "kind": "error",
+      "source": "server",
+      "service": "python-api",
+      "type": "requests.exceptions.ConnectionError",
+      "message": "HTTPSConnectionPool(host='pay.example.com', port=443): Max retries exceeded",
+      "frames": [
+        {
+          "function": "create_connection",
+          "file": "/srv/app/.venv/lib/python3.12/site-packages/urllib3/util/connection.py",
+          "line": 85
+        },
+        {
+          "function": "HTTPAdapter.send",
+          "file": "/srv/app/.venv/lib/python3.12/site-packages/requests/adapters.py",
+          "line": 700
+        },
+        {
+          "function": "Session.request",
+          "file": "/srv/app/.venv/lib/python3.12/site-packages/requests/sessions.py",
+          "line": 589
+        },
+        {
+          "function": "PaymentClient.charge",
+          "file": "billing/client.py",
+          "line": 41
+        },
+        {
+          "function": "checkout",
+          "file": "shop/views.py",
+          "line": 120
+        },
+        {
+          "function": "View.dispatch",
+          "file": "/srv/app/.venv/lib/python3.12/site-packages/django/views/generic/base.py",
+          "line": 143
+        },
+        {
+          "function": "_run_module_as_main",
+          "file": "\u003cfrozen runpy\u003e",
+          "line": 198
+        }
+      ]
+    },
+    "expected_fp": "c79a1c66544b102a37b131d82f6038b84142fad359b619b6591e0fddb1b8f70d",
+    "normalized": {
+      "kind": "error",
+      "source": "server",
+      "service": "python-api",
+      "type": "requests.exceptions.ConnectionError",
+      "template": "HTTPSConnectionPool(host=\u003cstr\u003e, port=\u003cnum\u003e): Max retries exceeded",
+      "frames": [
+        "PaymentClient.charge@billing/client.py",
+        "checkout@shop/views.py"
+      ]
+    }
+  },
+  {
+    "name": "python-stdlib-and-dist-packages",
+    "signal": {
+      "kind": "error",
+      "source": "server",
+      "service": "python-worker",
+      "type": "json.decoder.JSONDecodeError",
+      "message": "Expecting value: line 1 column 1 (char 0)",
+      "frames": [
+        {
+          "function": "JSONDecoder.raw_decode",
+          "file": "/usr/local/lib/python3.11/json/decoder.py",
+          "line": 355
+        },
+        {
+          "function": "JSONDecoder.decode",
+          "file": "/usr/local/lib/python3.11/json/decoder.py",
+          "line": 337
+        },
+        {
+          "function": "loads",
+          "file": "/home/deploy/.pyenv/versions/3.11.9/lib/python3.11/json/__init__.py",
+          "line": 346
+        },
+        {
+          "function": "cursor.execute",
+          "file": "/usr/lib/python3/dist-packages/psycopg2/extras.py",
+          "line": 146
+        },
+        {
+          "function": "sync_orders",
+          "file": "orders/tasks.py",
+          "line": 58
+        }
+      ]
+    },
+    "expected_fp": "16f75d427c7d3fbd3e3adb8a80b514bffc629b73f1a219c6b46423cb4abafaf4",
+    "normalized": {
+      "kind": "error",
+      "source": "server",
+      "service": "python-worker",
+      "type": "json.decoder.JSONDecodeError",
+      "template": "Expecting value: line \u003cnum\u003e column \u003cnum\u003e (char \u003cnum\u003e)",
+      "frames": [
+        "sync_orders@orders/tasks.py"
+      ]
+    }
+  },
+  {
+    "name": "python-pypy-and-rhel-layouts",
+    "signal": {
+      "kind": "error",
+      "source": "server",
+      "service": "python-worker",
+      "type": "TimeoutError",
+      "message": "timed out",
+      "frames": [
+        {
+          "function": "create_connection",
+          "file": "/usr/lib64/python3.9/socket.py",
+          "line": 845
+        },
+        {
+          "function": "Connection._execute_context",
+          "file": "/opt/pypy/lib/pypy3.10/site-packages/sqlalchemy/engine/base.py",
+          "line": 1967
+        },
+        {
+          "function": "refresh_rates",
+          "file": "rates/jobs.py",
+          "line": 22
+        }
+      ]
+    },
+    "expected_fp": "df2bf4904b65b1da176f75c2764d6a5d9f939f8e8d27e047347d677e7822cb0f",
+    "normalized": {
+      "kind": "error",
+      "source": "server",
+      "service": "python-worker",
+      "type": "TimeoutError",
+      "template": "timed out",
+      "frames": [
+        "refresh_rates@rates/jobs.py"
+      ]
+    }
+  },
+  {
+    "name": "dotnet-framework-innermost",
+    "signal": {
+      "kind": "error",
+      "source": "server",
+      "service": "dotnet-api",
+      "type": "System.InvalidOperationException",
+      "message": "Sequence contains no elements",
+      "frames": [
+        {
+          "function": "System.Linq.ThrowHelper.ThrowNoElementsException",
+          "file": "",
+          "line": 0
+        },
+        {
+          "function": "System.Linq.Enumerable.First",
+          "file": "",
+          "line": 0
+        },
+        {
+          "function": "Microsoft.EntityFrameworkCore.Query.Internal.QueryCompiler.Execute",
+          "file": "",
+          "line": 0
+        },
+        {
+          "function": "Shop.Orders.OrderService.Place",
+          "file": "src/Shop/Orders/OrderService.cs",
+          "line": 77
+        },
+        {
+          "function": "Microsoft.AspNetCore.Mvc.Infrastructure.ActionMethodExecutor.Execute",
+          "file": "",
+          "line": 0
+        },
+        {
+          "function": "Shop.Api.OrdersController.Post",
+          "file": "src/Shop.Api/OrdersController.cs",
+          "line": 31
+        }
+      ]
+    },
+    "expected_fp": "8230bc77621c2529e417833277a2360d7b4aae9fe0615f29f30bf55dd4503704",
+    "normalized": {
+      "kind": "error",
+      "source": "server",
+      "service": "dotnet-api",
+      "type": "System.InvalidOperationException",
+      "template": "Sequence contains no elements",
+      "frames": [
+        "Shop.Orders.OrderService.Place@Shop/Orders/OrderService.cs",
+        "Shop.Api.OrdersController.Post@src/Shop.Api/OrdersController.cs"
+      ]
+    }
+  },
+  {
+    "name": "near-misses-stay-in-app",
+    "signal": {
+      "kind": "error",
+      "source": "server",
+      "service": "mixed",
+      "type": "Boom",
+      "frames": [
+        {
+          "function": "Shop.System.Clock.Now",
+          "file": "src/Shop/System/Clock.cs",
+          "line": 12
+        },
+        {
+          "function": "MicrosoftGraph.Client.Fetch",
+          "file": "src/Graph/Client.cs",
+          "line": 9
+        },
+        {
+          "function": "load",
+          "file": "/srv/app/lib/python3_compat.py",
+          "line": 3
+        },
+        {
+          "function": "Packages.Site.render",
+          "file": "site/packages.py",
+          "line": 7
+        }
+      ]
+    },
+    "expected_fp": "5d4c7a4dafb39c80c6b63de616d86de462f067e605b44a3ca7351c2cd2c85bb9",
+    "normalized": {
+      "kind": "error",
+      "source": "server",
+      "service": "mixed",
+      "type": "Boom",
+      "template": "",
+      "frames": [
+        "Shop.System.Clock.Now@Shop/System/Clock.cs",
+        "MicrosoftGraph.Client.Fetch@src/Graph/Client.cs",
+        "load@app/lib/python3_compat.py",
+        "Packages.Site.render@site/packages.py"
+      ]
+    }
+  }
+]

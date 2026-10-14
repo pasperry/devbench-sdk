@@ -188,5 +188,41 @@
       "template": "heap grew 42MB over \u003cnum\u003e interactions on /invoices",
       "frames": []
     }
+  },
+  {
+    "name": "client-console-error-message-only",
+    "signal": {
+      "kind": "error",
+      "source": "client",
+      "type": "ConsoleError",
+      "message": "[TwilioVoice][Device] Received error:  ConnectionError: ConnectionError (31005): A connection error occurred during the call"
+    },
+    "expected_fp": "4ef5d586b0b31f4a9698b2756c9bfeb0a341ba45779d2b4ea6ea84938bc351d3",
+    "normalized": {
+      "kind": "error",
+      "source": "client",
+      "service": "",
+      "type": "ConsoleError",
+      "template": "[TwilioVoice][Device] Received error: ConnectionError: ConnectionError (\u003cnum\u003e): A connection error occurred during the call",
+      "frames": []
+    }
+  },
+  {
+    "name": "client-console-error-emoji",
+    "signal": {
+      "kind": "error",
+      "source": "client",
+      "type": "ConsoleError",
+      "message": "❌ Device error: TransportError (31009): No transport available to send or receive messages"
+    },
+    "expected_fp": "64b6d9c0a033b869883d3d21f4e53b82956820369653d48251dc93728f0175e6",
+    "normalized": {
+      "kind": "error",
+      "source": "client",
+      "service": "",
+      "type": "ConsoleError",
+      "template": "❌ Device error: TransportError (\u003cnum\u003e): No transport available to send or receive messages",
+      "frames": []
+    }
   }
 ]

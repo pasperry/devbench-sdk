@@ -148,9 +148,9 @@ module Devbench
         false
       end
 
-      # The `exception` report for an error, without sending it. Used by
-      # the self-test (Devbench.test!), which sends one synthetic report
-      # straight to ingest, built exactly as a real one would be.
+      # The `exception` report for an error, built exactly as a real one
+      # would be, without sending it. (The self-test no longer uses it: it
+      # POSTs /v1/check and sends no report.)
       def report_for(error, context:, handled:, symbol: nil)
         exception_payload(error, context, handled, symbol)
       end

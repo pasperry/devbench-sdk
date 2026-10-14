@@ -14,13 +14,22 @@ require 'devbench/fingerprint'
 # and ADT_REQUIRE_VECTORS=1 (CI) turns a missing file into a failure.
 class FingerprintVectorsTest < Minitest::Test
   # DEVBENCH_TESTDATA: the public SDK repo's CI, whose layout differs.
-  VECTORS_PATH = File.join(ENV['DEVBENCH_TESTDATA'] || File.expand_path('../../../../testdata', __dir__), 'fingerprint_vectors.json')
-  VECTORS = File.exist?(VECTORS_PATH) ? JSON.parse(File.read(VECTORS_PATH)) : nil
+  def self.load(name)
+    path = File.join(ENV['DEVBENCH_TESTDATA'] || File.expand_path('../../../../testdata', __dir__), name)
+    [path, File.exist?(path) ? JSON.parse(File.read(path)) : nil]
+  end
+
+  VECTORS_PATH, VECTORS = load('fingerprint_vectors.json')
+
+  # The subclass below runs the same checks over its own file.
+  def vectors
+    self.class::VECTORS
+  end
 
   def setup
-    return if VECTORS
+    return if vectors
 
-    flunk "missing #{VECTORS_PATH}" if ENV['ADT_REQUIRE_VECTORS'] == '1'
+    flunk "missing #{self.class::VECTORS_PATH}" if ENV['ADT_REQUIRE_VECTORS'] == '1'
     skip 'shared fingerprint vectors live in the repo (testdata/), not in a vendored gem'
   end
 
@@ -32,16 +41,16 @@ class FingerprintVectorsTest < Minitest::Test
   end
 
   def test_every_vector_reproduces_exactly
-    refute_empty VECTORS, 'vector file is empty'
+    refute_empty vectors, 'vector file is empty'
 
-    VECTORS.each do |v|
+    vectors.each do |v|
       assert_equal v['expected_fp'], compute(v['signal']), "fingerprint for #{v['name']}"
     end
   end
 
   # The intermediate form too, so a mismatch says which part diverged.
   def test_every_normalized_form_matches
-    VECTORS.each do |v|
+    vectors.each do |v|
       s = v['signal']
       norm = Devbench::Fingerprint.normalize(s['kind'], s['source'], s['service'].to_s, s['type'].to_s,
                                              s['message'].to_s, s['frames'] || [])
@@ -51,6 +60,13 @@ class FingerprintVectorsTest < Minitest::Test
       assert_equal want['type'], norm[:type], "type for #{v['name']}"
     end
   end
+end
+
+# Staged rule changes in the same shape (#235: Python and .NET dependency
+# frames), read until every SDK passes them; the entries then move into
+# fingerprint_vectors.json. Required like the main file.
+class FingerprintVectorsNextTest < FingerprintVectorsTest
+  VECTORS_PATH, VECTORS = load('fingerprint_vectors_next.json')
 end
 
 # Where Go's regexp and Ruby's differ, pinned against values computed by the

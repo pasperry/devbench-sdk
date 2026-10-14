@@ -133,10 +133,10 @@ module Devbench
       false
     end
 
-    # Sends one synthetic exception straight to Dev Bench and prints the
-    # result, so an operator can check the DSN without waiting for a flush
-    # (`rake devbench:test` under Rails). Returns true when ingest accepted
-    # it. Never raises.
+    # Asks ingest whether the DSN's key is valid (`POST /v1/check`) and prints
+    # the answer, so an operator can check the DSN without waiting for a
+    # flush (`rake devbench:test` under Rails). Creates nothing: no event,
+    # no issue. Returns true when ingest accepted the key. Never raises.
     def test!(io: $stdout)
       cfg = config
       unless cfg.enabled?

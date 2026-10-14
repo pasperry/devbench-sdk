@@ -74,8 +74,17 @@ test(`sustains ${EVENTS.toLocaleString()} events without growing`, { timeout: 12
   // An array of per-event timings would be megabytes of allocation inside the
   // very loop whose heap growth we are measuring, which would mask a real leak
   // with our own instrumentation. Two counters and a max are O(1).
+  //
+  // An event's cost is the main thread's CPU time across it, not wall time
+  // (#531). Wall time also counts every moment the OS left this process
+  // descheduled: on a loaded machine one event "took" 86-146ms of wall time
+  // while the sensor did microseconds of work, and the budget measured the
+  // host. A descheduled thread accrues no CPU time; work the sensor does, and
+  // GC its allocations cause on this thread, does. The wall-clock max is still
+  // reported, as a diagnostic.
   let overBudget = 0;
   let maxSliceMs = 0;
+  let maxWallMs = 0;
 
   for (let i = 0; i < EVENTS; i++) {
     // A realistic mix: mostly repeats of a handful of problems, a slow trickle
@@ -85,6 +94,7 @@ test(`sustains ${EVENTS.toLocaleString()} events without growing`, { timeout: 12
     sensor.beginIntent('click', novel ? `rare-button-${i}` : 'Save');
 
     const started = process.hrtime.bigint();
+    const cpuStarted = process.threadCpuUsage();
 
     if (i % 3 === 0) {
       sensor.record('error', novel ? `NovelError${i}` : 'TypeError',
@@ -99,9 +109,12 @@ test(`sustains ${EVENTS.toLocaleString()} events without growing`, { timeout: 12
       });
     }
 
-    const sliceMs = Number(process.hrtime.bigint() - started) / 1e6;
+    const cpu = process.threadCpuUsage(cpuStarted);
+    const wallMs = Number(process.hrtime.bigint() - started) / 1e6;
+    const sliceMs = (cpu.user + cpu.system) / 1000;
     if (sliceMs > BUDGET.maxTaskMs) overBudget++;
     if (sliceMs > maxSliceMs) maxSliceMs = sliceMs;
+    if (wallMs > maxWallMs) maxWallMs = wallMs;
 
     if (i % sampleEvery === 0) samples.push(await heapUsed());
     // A real page returns to the event loop between events; a loop that never
@@ -121,6 +134,7 @@ test(`sustains ${EVENTS.toLocaleString()} events without growing`, { timeout: 12
 
   // In the log on every run, so a nightly that passes still shows its shape.
   t.diagnostic(`heap samples: ${samples.map((b) => (b / 1024 / 1024).toFixed(1)).join(', ')}MB`);
+  t.diagnostic(`slowest event: ${maxSliceMs.toFixed(2)}ms of CPU, ${maxWallMs.toFixed(2)}ms of wall time (host included)`);
 
   // 2. No *unbounded* heap growth.
   //
@@ -150,11 +164,12 @@ test(`sustains ${EVENTS.toLocaleString()} events without growing`, { timeout: 12
 
   // 3. Events must not stall the main thread.
   //
-  // Asserting on the *maximum* here was wrong, and flaked roughly one run in
-  // twenty. Wall-clock around a single call also captures whatever GC pause,
-  // scheduler preemption, or JIT deopt happens to land inside it — so over
-  // enough events a max eventually measures the host, not this code. A flaky
-  // budget check is worse than no budget check: it trains people to re-run CI.
+  // Asserting on the *maximum* wall time here was wrong, and flaked roughly
+  // one run in twenty. Wall-clock around a single call also captures whatever
+  // GC pause, scheduler preemption, or JIT deopt happens to land inside it —
+  // so over enough events a max eventually measures the host, not this code.
+  // A flaky budget check is worse than no budget check: it trains people to
+  // re-run CI. Both checks below are on CPU time (see the counters above).
   //
   // What the budget actually means is "the sensor does not stall the UI", which
   // is a property of the distribution. So: essentially every event is inside
@@ -162,15 +177,15 @@ test(`sustains ${EVENTS.toLocaleString()} events without growing`, { timeout: 12
   const overBudgetRate = overBudget / EVENTS;
   assert.ok(
     overBudgetRate < 0.001,
-    `${(overBudgetRate * 100).toFixed(3)}% of events exceeded the ${BUDGET.maxTaskMs}ms budget ` +
-      `(${overBudget} of ${EVENTS}); at most 0.1% is tolerated as host noise`,
+    `${(overBudgetRate * 100).toFixed(3)}% of events used more than the ${BUDGET.maxTaskMs}ms budget of CPU ` +
+      `(${overBudget} of ${EVENTS}); at most 0.1% is tolerated as GC and JIT noise`,
   );
 
   // A genuine pathology — a pathological regex, an unbounded loop — shows up
   // here rather than in the rate above.
   assert.ok(
     maxSliceMs < 50,
-    `slowest single event took ${maxSliceMs.toFixed(2)}ms; that is not GC noise`,
+    `slowest single event used ${maxSliceMs.toFixed(2)}ms of CPU; that is not GC noise`,
   );
 });
 

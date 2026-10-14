@@ -144,6 +144,7 @@ test('the shared redaction vectors hold in the browser SDK', async () => {
     shared: Array<{ name: string; in: string; out: string }>;
     must_survive: Array<{ name: string; in: string; out: string }>;
     numbers: Array<{ name: string; in: string; out: string }>;
+    key_value: Array<{ name: string; in: string; out: string }>;
   };
 
   assert.ok(vectors.shared.length > 0, 'no shared vectors; this test proves nothing');
@@ -159,6 +160,15 @@ test('the shared redaction vectors hold in the browser SDK', async () => {
   for (const v of vectors.numbers) {
     assert.equal(redactText(v.in), v.out, `numbers: ${v.name}: ${v.in}`);
     assert.equal(redactText(v.out), v.out, `numbers: ${v.name}: not idempotent`);
+  }
+
+  // The email rule's left edge (#148): the local part stops at `=` and `:`,
+  // so a key=value or JSON line keeps the key that says which field held the
+  // address; connection-string credentials still go first. Idempotent too.
+  assert.ok(vectors.key_value.length > 0, 'no key_value vectors; this test proves nothing');
+  for (const v of vectors.key_value) {
+    assert.equal(redactText(v.in), v.out, `key_value: ${v.name}: ${v.in}`);
+    assert.equal(redactText(v.out), v.out, `key_value: ${v.name}: not idempotent`);
   }
 
   // A redactor that eats the diagnostic content is useless.

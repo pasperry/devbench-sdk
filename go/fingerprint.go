@@ -47,6 +47,22 @@ var fpDependencyPathFragments = []string{
 	"/go/pkg/mod/",
 	"/.bundle/",
 	"<anonymous>",
+	// Python (#235): pip packages (site-packages, Debian's dist-packages)
+	// and the standard library (lib/python3.X, RHEL's lib64/python3.X);
+	// frozen stdlib modules report a file like "<frozen runpy>".
+	"/site-packages/",
+	"/dist-packages/",
+	"/lib/python3.",
+	"/lib64/python3.",
+	"<frozen ",
+}
+
+// fpDependencyFunctionPrefixes are .NET framework frames (#235): they ship
+// without PDBs, so they carry no file, only a namespace-qualified function.
+// A prefix of the trimmed function, so `Shop.System.Clock.Now` stays in-app.
+var fpDependencyFunctionPrefixes = []string{
+	"System.",
+	"Microsoft.",
 }
 
 // fpTraits lets a rule be skipped when the line cannot possibly match. An
@@ -103,7 +119,9 @@ var fpTemplateRules = []struct {
 		func(t fpTraits) bool { return t.digit && t.dash && t.colon }},
 	{regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`), "<date>",
 		func(t fpTraits) bool { return t.digit && t.dash }},
-	{regexp.MustCompile(`\b[^\s<>@]+@[^\s<>@]+\.[A-Za-z]{2,}\b`), "<email>",
+	// The local part stops at `=` and `:` (#148), so `customer=sam@x.com`
+	// templates to `customer=<email>`. Same class as scrub.go's email rule.
+	{regexp.MustCompile(`\b[^\s<>@=:]+@[^\s<>@]+\.[A-Za-z]{2,}\b`), "<email>",
 		func(t fpTraits) bool { return t.at && t.dot }},
 	{regexp.MustCompile(`\b[a-z][a-z0-9+.-]*://\S+`), "<url>",
 		func(t fpTraits) bool { return t.slashes }},
@@ -188,6 +206,12 @@ func fpIsDependencyFrame(f Frame) bool {
 	hay := f.File + " " + f.Function
 	for _, frag := range fpDependencyPathFragments {
 		if strings.Contains(hay, frag) {
+			return true
+		}
+	}
+	fn := strings.TrimSpace(f.Function)
+	for _, prefix := range fpDependencyFunctionPrefixes {
+		if strings.HasPrefix(fn, prefix) {
 			return true
 		}
 	}

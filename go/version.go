@@ -3,7 +3,7 @@ package devbench
 // Version of this SDK. Each SDK has its own version and release tag; the Go
 // release (tag go-vX.Y.Z in the public repo) checks this equals the tag and
 // creates the module tags go/vX.Y.Z and go/gin/vX.Y.Z.
-const Version = "0.8.0"
+const Version = "0.8.1"
 
 // Name is this SDK's name in every flush's `sdk` field: the key
 // testdata/protocol_vectors.json `sdk.names` gives sdk/server/go

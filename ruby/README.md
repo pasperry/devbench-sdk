@@ -50,7 +50,7 @@ gem (upgrading the gem upgrades the sensor), with **only the public part**
 of `DEVBENCH_DSN`:
 
 ```html
-<script src="https://unpkg.com/devbench@0.8.0/dist/devbench.min.js"
+<script src="https://unpkg.com/devbench@0.8.1/dist/devbench.min.js"
         data-dsn="https://<public>@adt-ingest.onrender.com" data-release="<release>" defer></script>
 ```
 

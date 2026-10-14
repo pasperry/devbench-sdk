@@ -52,17 +52,31 @@ func TestUser_OnTheWire(t *testing.T) {
 	send(message{V: 1, Kind: "handled_failure", Symbol: "with", User: userField(ctx)})
 	send(message{V: 1, Kind: "handled_failure", Symbol: "without", User: userField(context.Background())})
 
-	m := s.next(t)
-	u, ok := m["user"].(map[string]any)
+	// Matched by symbol, not by order: the writer may put the two reports on
+	// two connections, and nothing orders across connections (#549).
+	got := map[any]map[string]any{}
+	for i := 0; i < 2; i++ {
+		m := s.next(t)
+		got[m["symbol"]] = m
+	}
+
+	with, ok := got["with"]
 	if !ok {
-		t.Fatalf("user missing: %v", m)
+		t.Fatalf("the report with a user never arrived: %v", got)
+	}
+	u, ok := with["user"].(map[string]any)
+	if !ok {
+		t.Fatalf("user missing: %v", with)
 	}
 	if u["email"] != "pat@example.com" || u["account"] != "acct-1182" {
 		t.Errorf("user = %v", u)
 	}
 
-	m = s.next(t)
-	if _, present := m["user"]; present {
-		t.Errorf("user present with no identity set: %v", m)
+	without, ok := got["without"]
+	if !ok {
+		t.Fatalf("the report without a user never arrived: %v", got)
+	}
+	if _, present := without["user"]; present {
+		t.Errorf("user present with no identity set: %v", without)
 	}
 }

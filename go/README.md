@@ -228,10 +228,14 @@ What is captured:
   anything derived from it; under gin also `c`) through `NewLogHandler`,
   in a request whose `x-adt-trace` header `Middleware` accepted. Rendered
   as one line: time, level, message, `key=value` attributes, the trace.
+  A message with newlines (an error and its stack) is held as one line per
+  line, each with the time, level and trace; blank lines are dropped and at
+  most 50 lines are kept, the last saying how many were left out.
   Records below the wrapped handler's level are not captured.
 - **Standard `log` lines that carry a trace id** in their text, with
-  `log.SetOutput(devbench.LogWriter(os.Stderr))`. `devbench.Logger(ctx)`
-  returns a `*log.Logger` that writes the id for you.
+  `log.SetOutput(devbench.LogWriter(os.Stderr))`, and the rest of that
+  message's lines (same rules). `devbench.Logger(ctx)` returns a
+  `*log.Logger` that writes the id for you.
 
 What is not:
 

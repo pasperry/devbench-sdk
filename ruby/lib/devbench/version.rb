@@ -4,7 +4,7 @@ module Devbench
   # The gem's release version. Each SDK has its own version and release tag;
   # the Ruby release (tag ruby-vX.Y.Z in the public repo) checks this equals
   # the tag. The wire format is PROTOCOL_VERSION below.
-  VERSION = '0.8.0'
+  VERSION = '0.8.1'
 
   # This SDK's name in every flush's `sdk` field: the key
   # testdata/protocol_vectors.json `sdk.names` gives sdk/server/ruby

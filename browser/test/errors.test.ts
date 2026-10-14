@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { installErrorCapture, parseStack } from '../src/capture/errors.js';
+import { installErrorCapture, isContentFreeConsoleLine, parseStack } from '../src/capture/errors.js';
 import { Sensor } from '../src/sensor.js';
 import { resetForTests } from '../src/safe.js';
 
@@ -64,4 +64,56 @@ test('a throwing sensor cannot break console.error', () => {
   assert.doesNotThrow(() => fake.error('app still works'));
   assert.equal(seen.length, 1);
   resetForTests();
+});
+
+// #518: content-free console.error lines (banners, `[object Event]`, a bare
+// `Error code: N`) merged unrelated incidents into one fingerprint. They are
+// not recorded; the app's console still sees them, and lines that say
+// something are recorded as before.
+test('content-free console.error lines are not recorded', () => {
+  resetForTests();
+  const seen: unknown[][] = [];
+  const fake = { error: (...args: unknown[]) => { seen.push(args); } };
+  const sensor = new Sensor({ endpoint: 'http://127.0.0.1:9/v1/flush', tenant: 'acme', ingestKey: 'adt_client_test' });
+  const uninstall = installErrorCapture(sensor, { console: fake });
+
+  const noise: unknown[][] = [
+    ['=================================================='],
+    ['----', '****'],
+    ['═══════════'],
+    [],
+    [''],
+    [{ toString: () => '[object Event]' }],
+    ['[object Event]'],
+    [{}],
+    ['Error code: 31005'],
+    ['Error code: 20101'],
+    ['Error code:', 31009],
+    ['error: 20104'],
+    ['code 31009.'],
+    [42],
+  ];
+  for (const args of noise) fake.error(...args);
+  assert.equal(seen.length, noise.length, 'the original console.error still sees every line');
+  assert.equal(sensor.stats().distinctFingerprints, 0, 'no content-free line is recorded');
+
+  fake.error('Error code: 31005 (ConnectionError: websocket closed)');
+  fake.error('Twilio device error', { code: 31005 });
+  fake.error('[object Event] while loading the call');
+  fake.error(new Error(''));
+  assert.equal(sensor.stats().distinctFingerprints, 4, 'lines with content, and Errors, are recorded');
+  uninstall();
+  resetForTests();
+});
+
+test('isContentFreeConsoleLine', () => {
+  for (const line of ['=====', '', '   ', '12345', '--- 2026-10-14 ---', '>>>> <<<<', '🔥🔥🔥',
+    '[object Event]', '[object Object] [object Object]', 'Error code: 31005', 'Error: 20101',
+    'ERRNO=5', 'status #503']) {
+    assert.equal(isContentFreeConsoleLine(line), true, `content-free: ${JSON.stringify(line)}`);
+  }
+  for (const line of ['Payment failed', 'Error code: 31005 token expired', 'TypeError', 'Ошибка',
+    'エラー', '[object Event] in checkout', 'code: 31005 from device', 'Error code: abc']) {
+    assert.equal(isContentFreeConsoleLine(line), false, `has content: ${JSON.stringify(line)}`);
+  }
 });

@@ -1,0 +1,51 @@
+{
+  "_comment": [
+    "Shared message-template vectors (internal/fingerprint Template).",
+    "",
+    "The template is the message part of every fingerprint (docs/server-sdk/",
+    "conformance.md), so an implementation that templates a message differently",
+    "splits one problem into two. fingerprint_vectors.json pins whole",
+    "fingerprints; this file pins the templating of single messages, so a",
+    "divergence names the rule that drifted.",
+    "",
+    "`template` cases are message in, template out. Hand-written, not generated.",
+    "",
+    "The email rule's left edge (#148): the local part stops at `=` and `:`, so",
+    "`customer=sam@example.com` templates to `customer=<email>`, not `<email>`.",
+    "The backend reads this file now; every SDK adopts it in the follow-up named",
+    "in docs/server-sdk/conformance.md (\"Email rule\"), after which it is",
+    "checked everywhere and fingerprint_vectors.json gains a key=value vector."
+  ],
+  "template": [
+    {
+      "name": "key=value keeps the key",
+      "in": "lookup failed customer=sam@example.com",
+      "out": "lookup failed customer=<email>"
+    },
+    {
+      "name": "a Go slog attribute line keeps every key",
+      "in": "lookup failed customer=sam@example.com id=7",
+      "out": "lookup failed customer=<email> id=<num>"
+    },
+    {
+      "name": "key:value with no space keeps the key",
+      "in": "bounced to:sam@example.com after 3 tries",
+      "out": "bounced to:<email> after <num> tries"
+    },
+    {
+      "name": "a JSON line keeps its key as its own hole",
+      "in": "{\"email\":\"sam@example.com\",\"status\":500}",
+      "out": "{<str>:<str>,<str>:<num>}"
+    },
+    {
+      "name": "a free-text email is unchanged",
+      "in": "Completed update for alice@example.com",
+      "out": "Completed update for <email>"
+    },
+    {
+      "name": "a connection string still templates as a url",
+      "in": "cannot reach postgres://admin:s3cret@db.internal/app",
+      "out": "cannot reach <url>"
+    }
+  ]
+}

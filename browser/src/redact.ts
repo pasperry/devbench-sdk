@@ -66,7 +66,15 @@ function isPhone(c: string, next: string): boolean {
  * whoever reads the issue later.
  */
 const PII_PATTERNS: Array<[RegExp, (...m: string[]) => string]> = [
-  [/\b[^\s<>@]+@[^\s<>@]+\.[A-Za-z]{2,}\b/g, () => '<redacted:email>'],
+  // Credentials inside a URL, before the email rule (internal/scrub's order).
+  // The narrowed email rule below stops at `:`, so without this a
+  // `postgres://admin:pw@db.host` keeps its user and only the password goes.
+  // Go's \s spelled out, as in the phone rule.
+  [/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^\t\n\f\r :/@]+:[^\t\n\f\r /@]+@/g, (_m, scheme) => `${scheme}<redacted:credentials>@`],
+  // The local part stops at `=` and `:` (#148): without that it starts at the
+  // key, and `customer=sam@example.com` or `"email":"sam@..."` loses the key
+  // that says which field held the address.
+  [/\b[^\s<>@=:]+@[^\s<>@]+\.[A-Za-z]{2,}\b/g, () => '<redacted:email>'],
   [/\b\d{3}-\d{2}-\d{4}\b/g, () => '<redacted:ssn>'],
   [/\b(?:\d[ -]*?){13,19}\b/g, (m) => (isCard(m) ? CARD : m)],
   // Group 1 is the character before the number (or the start of the text):

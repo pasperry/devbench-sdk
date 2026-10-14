@@ -1,46 +1,63 @@
 package devbench
 
 import (
+	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 )
 
-// Known-answer session tokens. Ingest verifies every token with this
-// package's VerifySession, so a token the Ruby SDK mints must be these exact
-// bytes too: sdk/server/ruby/test/session_test.rb pins the same table. There
-// are no shared testdata/ vectors for session tokens yet (#146); until there
-// are, change a row here only together with its Ruby twin.
-//
-// Fixed inputs: secret katSecret, tenant "acme", clock 1700000000, ttl one
-// hour, so every payload's expiry is 1700003600.
-const (
-	katSecret = "a-tenant-session-signing-secret-32b"
-	katNow    = 1700000000
-	katExpiry = 1700003600
-)
+// testdata/session_vectors.json (#181): the shared adts1 session-token
+// vectors. Ingest verifies every token with this package's VerifySession,
+// and the Ruby SDK (sdk/server/ruby/test/session_test.rb) reads the same
+// file, so a token either SDK mints is the same bytes. Each row pins the
+// session clock to its own `now`. Missing file: skipped in a vendored copy,
+// a failure under ADT_REQUIRE_VECTORS=1 (CI, and the public SDK repo's CI).
 
-var sessionKAT = []struct {
-	name        string
-	subject     string
-	keptSubject string // after truncation to at most maxSubjectLen bytes
-	token       string
-}{
-	{"plain subject", "user-42", "user-42",
-		"adts1.YWNtZXwxNzAwMDAzNjAwfHVzZXItNDI.HPdOJfrw2tnU5pQmLcQ5847z3r0yZUFj5sWFUpAU0Zg"},
-	{"no subject", "", "",
-		"adts1.YWNtZXwxNzAwMDAzNjAwfA.fyO1jBICsrQrfXC_hDEAyieu2os3fSH2ZqwFUfnNSJY"},
-	{"ascii over the bound keeps 128 bytes", strings.Repeat("x", 200), strings.Repeat("x", 128),
-		"adts1.YWNtZXwxNzAwMDAzNjAwfHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4.c9UIiw5LEm3XVeOQOK19XVznTEAUXWbaC5SaYHfGSRg"},
-	{"two-byte characters ending on the bound", strings.Repeat("é", 100), strings.Repeat("é", 64),
-		"adts1.YWNtZXwxNzAwMDAzNjAwfMOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOp.4veV5h1Pe1wXkPuIvSTClWySEroW3o3rMhmYb2W5HZA"},
-	{"two-byte character straddling the bound", "a" + strings.Repeat("é", 100), "a" + strings.Repeat("é", 63),
-		"adts1.YWNtZXwxNzAwMDAzNjAwfGHDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6k.kEZibMkUk7hrvzUdgOM9ZxPMY4kDXyP_FI_5BvWZjl0"},
-	{"three-byte character straddling the bound", strings.Repeat("€", 60), strings.Repeat("€", 42),
-		"adts1.YWNtZXwxNzAwMDAzNjAwfOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrOKCrA.WVG9xXu5n2KEON0WELOMrGslRZxlUPdIF6XFODlCQ-g"},
-	{"four-byte character straddling the bound", "a" + strings.Repeat("😀", 40), "a" + strings.Repeat("😀", 31),
-		"adts1.YWNtZXwxNzAwMDAzNjAwfGHwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA.3v9yN5wgqPCZhiE0zVleLmrlcUKAPlh_waGoCy4PuWU"},
+type sessionVectorFile struct {
+	Format            string `json:"format"`
+	MaxSubjectBytes   int    `json:"max_subject_bytes"`
+	DefaultTTLSeconds int64  `json:"default_ttl_seconds"`
+	Mint              []struct {
+		Name        string `json:"name"`
+		Secret      string `json:"secret"`
+		Tenant      string `json:"tenant"`
+		Subject     string `json:"subject"`
+		Now         int64  `json:"now"`
+		TTLSeconds  int64  `json:"ttl_seconds"`
+		Token       string `json:"token"`
+		SubjectKept string `json:"subject_kept"`
+	} `json:"mint"`
+	Refuse []struct {
+		Name    string `json:"name"`
+		Secret  string `json:"secret"`
+		Tenant  string `json:"tenant"`
+		Subject string `json:"subject"`
+	} `json:"refuse"`
+	Verify []struct {
+		Name   string `json:"name"`
+		Secret string `json:"secret"`
+		Token  string `json:"token"`
+		Now    int64  `json:"now"`
+		Result string `json:"result"`
+		Claims *struct {
+			Tenant  string `json:"tenant"`
+			Subject string `json:"subject"`
+			Expires int64  `json:"expires"`
+		} `json:"claims"`
+	} `json:"verify"`
+}
+
+func loadSessionVectors(t *testing.T) sessionVectorFile {
+	t.Helper()
+	var vf sessionVectorFile
+	if err := json.Unmarshal(readVectors(t, "session_vectors.json"), &vf); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(vf.Mint) == 0 || len(vf.Refuse) == 0 || len(vf.Verify) == 0 {
+		t.Fatal("vector file is missing a mint, refuse or verify section; this test would prove nothing")
+	}
+	return vf
 }
 
 func pinSessionClock(t *testing.T, unix int64) {
@@ -49,49 +66,77 @@ func pinSessionClock(t *testing.T, unix int64) {
 	t.Cleanup(func() { sessionNow = time.Now })
 }
 
-func TestSessionKAT_MintIsByteExact(t *testing.T) {
-	pinSessionClock(t, katNow)
-	for _, tc := range sessionKAT {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := MintSession(katSecret, "acme", tc.subject, time.Hour)
+func TestSessionVectors_Constants(t *testing.T) {
+	vf := loadSessionVectors(t)
+	if vf.MaxSubjectBytes != maxSubjectLen {
+		t.Errorf("max_subject_bytes = %d, this SDK cuts at %d", vf.MaxSubjectBytes, maxSubjectLen)
+	}
+	if time.Duration(vf.DefaultTTLSeconds)*time.Second != DefaultSessionTTL {
+		t.Errorf("default_ttl_seconds = %d, this SDK defaults to %s", vf.DefaultTTLSeconds, DefaultSessionTTL)
+	}
+}
+
+func TestSessionVectors_MintIsByteExact(t *testing.T) {
+	for _, tc := range loadSessionVectors(t).Mint {
+		t.Run(tc.Name, func(t *testing.T) {
+			pinSessionClock(t, tc.Now)
+			got, err := MintSession(tc.Secret, tc.Tenant, tc.Subject, time.Duration(tc.TTLSeconds)*time.Second)
 			if err != nil {
 				t.Fatalf("MintSession: %v", err)
 			}
-			if got != tc.token {
-				t.Errorf("minted\n  %s\nwant\n  %s", got, tc.token)
+			if got != tc.Token {
+				t.Errorf("minted\n  %s\nwant\n  %s", got, tc.Token)
 			}
-		})
-	}
-}
-
-func TestSessionKAT_VerifyReadsBackTheFields(t *testing.T) {
-	pinSessionClock(t, katNow)
-	for _, tc := range sessionKAT {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := VerifySession(katSecret, tc.token)
+			// The kept subject is what the token carries.
+			claims, err := VerifySession(tc.Secret, got)
 			if err != nil {
-				t.Fatalf("VerifySession: %v", err)
+				t.Fatalf("VerifySession of the minted token: %v", err)
 			}
-			if got.Tenant != "acme" || got.Subject != tc.keptSubject || got.Expires.Unix() != katExpiry {
-				t.Errorf("verified %q / %q / %d, want acme / %q / %d",
-					got.Tenant, got.Subject, got.Expires.Unix(), tc.keptSubject, katExpiry)
+			if claims.Subject != tc.SubjectKept {
+				t.Errorf("subject kept %q, want %q", claims.Subject, tc.SubjectKept)
 			}
 		})
 	}
 }
 
-// The expiry second itself still verifies; the next second does not. The Ruby
-// SDK's verifier draws the line in the same place.
-func TestSessionKAT_ExpiryBoundary(t *testing.T) {
-	token := sessionKAT[0].token
-
-	pinSessionClock(t, katExpiry)
-	if _, err := VerifySession(katSecret, token); err != nil {
-		t.Errorf("at the expiry second: %v", err)
+func TestSessionVectors_RefuseCasesAreRefused(t *testing.T) {
+	for _, tc := range loadSessionVectors(t).Refuse {
+		t.Run(tc.Name, func(t *testing.T) {
+			if got, err := MintSession(tc.Secret, tc.Tenant, tc.Subject, time.Hour); err == nil {
+				t.Errorf("MintSession minted %q, want a refusal", got)
+			}
+		})
 	}
+}
 
-	pinSessionClock(t, katExpiry+1)
-	if _, err := VerifySession(katSecret, token); !errors.Is(err, ErrSessionExpired) {
-		t.Errorf("one second past expiry: %v, want ErrSessionExpired", err)
+func TestSessionVectors_Verify(t *testing.T) {
+	for _, tc := range loadSessionVectors(t).Verify {
+		t.Run(tc.Name, func(t *testing.T) {
+			pinSessionClock(t, tc.Now)
+			got, err := VerifySession(tc.Secret, tc.Token)
+			switch tc.Result {
+			case "valid":
+				if err != nil {
+					t.Fatalf("VerifySession: %v, want valid", err)
+				}
+				if tc.Claims == nil {
+					t.Fatal("a valid row without claims proves nothing")
+				}
+				if got.Tenant != tc.Claims.Tenant || got.Subject != tc.Claims.Subject || got.Expires.Unix() != tc.Claims.Expires {
+					t.Errorf("verified %q / %q / %d, want %q / %q / %d",
+						got.Tenant, got.Subject, got.Expires.Unix(), tc.Claims.Tenant, tc.Claims.Subject, tc.Claims.Expires)
+				}
+			case "expired":
+				if !errors.Is(err, ErrSessionExpired) {
+					t.Errorf("VerifySession: %v, want ErrSessionExpired", err)
+				}
+			case "invalid":
+				if !errors.Is(err, ErrSessionInvalid) {
+					t.Errorf("VerifySession: %v, want ErrSessionInvalid", err)
+				}
+			default:
+				t.Fatalf("unknown result %q", tc.Result)
+			}
+		})
 	}
 }

@@ -58,7 +58,9 @@ module Devbench
       [go_re('\b(password|passwd|pwd|secret|api[_\-]?key|access[_\-]?token|refresh[_\-]?token|' \
              'client[_\-]?secret|private[_\-]?key|session[_\-]?id|csrf[_\-]?token)' \
              "(#{WS}*[:=]#{WS}*)(\"[^\"]*\"|'[^']*'|#{NOT_WS}+)", Regexp::IGNORECASE), '\1\2<redacted:secret>'],
-      [go_re('\b[^\t\n\f\r <>@]+@[^\t\n\f\r <>@]+\.[A-Za-z]{2,}\b'), '<redacted:email>'],
+      # The local part stops at `=` and `:` (#148): `customer=sam@x.com`
+      # keeps its key. Same class as the template's email rule.
+      [go_re('\b[^\t\n\f\r <>@=:]+@[^\t\n\f\r <>@]+\.[A-Za-z]{2,}\b'), '<redacted:email>'],
       [go_re('\b\d{3}-\d{2}-\d{4}\b'), '<redacted:ssn>'],
       # The card and phone rules (#186) judge each candidate in the block.
       [CARD_CANDIDATE, ->(m) { card?(m[0]) ? CARD : m[0] }],

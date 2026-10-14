@@ -45,7 +45,10 @@ TEMPLATE_RULES = [
     (go_re(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE), "<uuid>"),
     (go_re(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"), "<ts>"),
     (go_re(r"\b\d{4}-\d{2}-\d{2}\b"), "<date>"),
-    (go_re(r"\b[^\t\n\f\r <>@]+@[^\t\n\f\r <>@]+\.[A-Za-z]{2,}\b"), "<email>"),
+    # The local part stops at `=` and `:` (#148), so `customer=sam@example.com`
+    # templates to `customer=<email>`, keeping the key. Same class as the
+    # scrub's email rule.
+    (go_re(r"\b[^\t\n\f\r <>@=:]+@[^\t\n\f\r <>@]+\.[A-Za-z]{2,}\b"), "<email>"),
     (go_re(r"\b[a-z][a-z0-9+.-]*://" + GO_NOT_WS + "+"), "<url>"),
     (go_re(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"), "<ip>"),
     (go_re(r"\b(?:0x)?[0-9a-fA-F]{8,}\b"), "<hex>"),
@@ -62,7 +65,16 @@ KEEP_SEGMENTS = 3
 DEPENDENCY_FRAGMENTS = (
     "/node_modules/", "/vendor/", "/gems/", "/ruby/gems/", "/usr/local/go/src/",
     "/go/pkg/mod/", "/.bundle/", "<anonymous>",
+    # Python (#235): pip packages (site-packages, Debian's dist-packages) and
+    # the standard library (lib/python3.X, RHEL's lib64/python3.X); frozen
+    # stdlib modules report a file like "<frozen runpy>".
+    "/site-packages/", "/dist-packages/", "/lib/python3.", "/lib64/python3.", "<frozen ",
 )
+
+# .NET framework frames (#235): they ship without PDBs, so they carry no
+# file, only a namespace-qualified function. A prefix of the trimmed
+# function, so `Shop.System.Clock.Now` stays in-app.
+DEPENDENCY_FUNCTION_PREFIXES = ("System.", "Microsoft.")
 
 ASSET_DIGEST = re.compile(r"(.+)[-.]([A-Za-z0-9_]{8,})((?:\.chunk|\.bundle)?\.(?:js|mjs|cjs|css)(?:\.map)?)\Z")
 _SURROGATE = re.compile("[\ud800-\udfff]")
@@ -180,7 +192,9 @@ def _field(frame: Any, name: str) -> str:
 
 def _dependency(file: str, function: str) -> bool:
     hay = file + " " + function
-    return any(frag in hay for frag in DEPENDENCY_FRAGMENTS)
+    if any(frag in hay for frag in DEPENDENCY_FRAGMENTS):
+        return True
+    return trim(function).startswith(DEPENDENCY_FUNCTION_PREFIXES)
 
 
 def _strip_asset_digest(name: str) -> str:

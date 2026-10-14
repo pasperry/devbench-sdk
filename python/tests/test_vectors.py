@@ -22,26 +22,37 @@ from devbench.trace import Trace
 from .helpers import vectors
 
 
+# fingerprint_vectors_next.json stages rule changes in the same shape (#235:
+# Python and .NET dependency frames) until every SDK reads it; its entries
+# then move into fingerprint_vectors.json. Both are required.
+FINGERPRINT_VECTOR_FILES = ("fingerprint_vectors.json", "fingerprint_vectors_next.json")
+
+
 class FingerprintVectorsTest(unittest.TestCase):
     def test_every_vector_reproduces_exactly(self) -> None:
-        cases = vectors("fingerprint_vectors.json", self)
-        self.assertTrue(cases, "vector file is empty")
-        for v in cases:
-            s = v["signal"]
-            got = F.compute(s["kind"], s["source"], s.get("service") or "", s.get("type") or "",
-                            s.get("message") or "", s.get("frames") or [])
-            self.assertEqual(v["expected_fp"], got, "fingerprint for %s" % v["name"])
+        for name in FINGERPRINT_VECTOR_FILES:
+            with self.subTest(file=name):
+                cases = vectors(name, self)
+                self.assertTrue(cases, "%s is empty" % name)
+                for v in cases:
+                    s = v["signal"]
+                    got = F.compute(s["kind"], s["source"], s.get("service") or "", s.get("type") or "",
+                                    s.get("message") or "", s.get("frames") or [])
+                    self.assertEqual(v["expected_fp"], got, "%s: fingerprint for %s" % (name, v["name"]))
 
     # The intermediate form too, so a mismatch says which part diverged.
     def test_every_normalized_form_matches(self) -> None:
-        for v in vectors("fingerprint_vectors.json", self):
-            s = v["signal"]
-            norm = F.normalize(s["kind"], s["source"], s.get("service") or "", s.get("type") or "",
-                               s.get("message") or "", s.get("frames") or [])
-            want = v["normalized"]
-            self.assertEqual(want["template"], norm["template"], "template for %s" % v["name"])
-            self.assertEqual(want.get("frames") or [], norm["frames"], "frames for %s" % v["name"])
-            self.assertEqual(want["type"], norm["type"], "type for %s" % v["name"])
+        for name in FINGERPRINT_VECTOR_FILES:
+            with self.subTest(file=name):
+                for v in vectors(name, self):
+                    s = v["signal"]
+                    norm = F.normalize(s["kind"], s["source"], s.get("service") or "", s.get("type") or "",
+                                       s.get("message") or "", s.get("frames") or [])
+                    want = v["normalized"]
+                    label = "%s: %%s for %s" % (name, v["name"])
+                    self.assertEqual(want["template"], norm["template"], label % "template")
+                    self.assertEqual(want.get("frames") or [], norm["frames"], label % "frames")
+                    self.assertEqual(want["type"], norm["type"], label % "type")
 
 
 class FingerprintSemanticsTest(unittest.TestCase):
@@ -73,6 +84,17 @@ class FingerprintSemanticsTest(unittest.TestCase):
                     {"function": "A#b", "file": "/home/ci/build/app/models/a.rb", "line": 77}]
         self.assertEqual(F.compute("error", "server", type="E", frames=app),
                          F.compute("error", "server", type="E", frames=with_gem))
+
+    # The .NET prefix (#235) is tested on strings.TrimSpace's result: an
+    # ideographic space is trimmed, a unit separator is not (str.strip()
+    # would trim both).
+    def test_function_prefix_is_matched_after_go_trim(self) -> None:
+        def frames(fn: str) -> list:
+            return F.normalize("error", "server", "", "E", "",
+                               [{"function": fn, "file": ""}, {"function": "App.Run", "file": "app.cs"}])["frames"]
+
+        self.assertEqual(["App.Run@app.cs"], frames("　System.Threading.Run"))
+        self.assertEqual(["\x1fSystem.Threading.Run@", "App.Run@app.cs"], frames("\x1fSystem.Threading.Run"))
 
     def test_only_five_frames_count(self) -> None:
         frames = [{"function": "f%d" % i, "file": "app/x%d.py" % i, "line": i} for i in range(1, 8)]
@@ -127,6 +149,27 @@ class RedactionVectorsTest(unittest.TestCase):
         self.check("numbers", scrub.text)
         self.check("numbers", lambda line: scrub.text(scrub.text(line)))
 
+    # The email rule's left edge (#148): the local part stops at `=` and `:`,
+    # so a key=value or JSON line keeps the key that says which field held
+    # the address; connection-string credentials still go first. Idempotent.
+    def test_key_value_vectors(self) -> None:
+        self.check("key_value", scrub.text)
+        self.check("key_value", lambda line: scrub.text(scrub.text(line)))
+
+
+class TemplateVectorsTest(unittest.TestCase):
+    """The template is the message part of every fingerprint, so a templating
+    divergence splits one problem in two (testdata/template_vectors.json,
+    message in, template out). Each case pins one message, so a failure
+    names the rule that drifted (#148: `customer=sam@example.com` ->
+    `customer=<email>`)."""
+
+    def test_every_template_case_reproduces_exactly(self) -> None:
+        cases = vectors("template_vectors.json", self)["template"]
+        self.assertTrue(cases, "template is empty; this test would prove nothing")
+        for v in cases:
+            self.assertEqual(v["out"], F.template(v["in"]), "template: %s" % v["name"])
+
 
 class EgressFromGoTest(unittest.TestCase):
     """The whole egress path for an exemplar against outputs produced by the
@@ -144,7 +187,9 @@ class EgressFromGoTest(unittest.TestCase):
             "[v1/sessA/actB/2] RuntimeError: charge <num> <num> <num> <num> failed for <trace> from <ip> [job]",
         "Faraday::ConnectionFailed: Failed to open TCP connection to postgres://admin:s3cretpw@db.internal:5432/app "
         "(Authorization: Bearer abcdefghijkl) [explicit, handled]":
-            "Faraday::ConnectionFailed: Failed to open TCP connection to <email>:<num>/app "
+            # #148: the email local part stops at `:`, so the URL rule now
+            # takes the whole connection string (it was `<email>:<num>/app`).
+            "Faraday::ConnectionFailed: Failed to open TCP connection to <url> "
             "(Authorization: <redacted:authorization> [explicit, handled]",
     }
 

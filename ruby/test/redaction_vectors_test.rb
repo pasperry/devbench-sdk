@@ -4,6 +4,7 @@ require 'minitest/autorun'
 require 'json'
 require 'devbench'
 require 'devbench/scrub'
+require 'devbench/fingerprint'
 
 # The redaction contract, shared with the sidecar and the browser
 # (testdata/redaction_vectors.json). In direct mode nothing stands between
@@ -58,6 +59,39 @@ class RedactionVectorsTest < Minitest::Test
     check('numbers') { |line| Devbench::Scrub.text(line) }
     check('numbers') { |line| Devbench::Scrub.text(Devbench::Scrub.text(line)) }
   end
+
+  # The email rule's left edge (#148): the local part stops at `=` and `:`,
+  # so a key=value or JSON line keeps the key that says which field held the
+  # address; connection-string credentials still go first. Idempotent too.
+  def test_key_value_vectors
+    check('key_value') { |line| Devbench::Scrub.text(line) }
+    check('key_value') { |line| Devbench::Scrub.text(Devbench::Scrub.text(line)) }
+  end
+end
+
+# The template is the message part of every fingerprint, so a templating
+# divergence splits one problem in two (testdata/template_vectors.json,
+# message in, template out). Each case pins one message, so a failure names
+# the rule that drifted (#148: `customer=sam@example.com` ->
+# `customer=<email>`).
+class TemplateVectorsTest < Minitest::Test
+  VECTORS_PATH = File.join(ENV['DEVBENCH_TESTDATA'] || File.expand_path('../../../../testdata', __dir__), 'template_vectors.json')
+  VECTORS = File.exist?(VECTORS_PATH) ? JSON.parse(File.read(VECTORS_PATH)) : nil
+
+  def setup
+    return if VECTORS
+
+    flunk "missing #{VECTORS_PATH}" if ENV['ADT_REQUIRE_VECTORS'] == '1'
+    skip 'shared template vectors live in the repo (testdata/), not in a vendored gem'
+  end
+
+  def test_every_template_case_reproduces_exactly
+    cases = VECTORS.fetch('template')
+    refute_empty cases, 'template is empty; this test would prove nothing'
+    cases.each do |v|
+      assert_equal v['out'], Devbench::Fingerprint.template(v['in']), "template: #{v['name']}"
+    end
+  end
 end
 
 # The whole egress path for an exemplar — trace kept, then template, scrub,
@@ -75,7 +109,9 @@ class EgressTest < Minitest::Test
       '[v1/sessA/actB/2] RuntimeError: charge <num> <num> <num> <num> failed for <trace> from <ip> [job]',
     'Faraday::ConnectionFailed: Failed to open TCP connection to postgres://admin:s3cretpw@db.internal:5432/app ' \
     '(Authorization: Bearer abcdefghijkl) [explicit, handled]' =>
-      'Faraday::ConnectionFailed: Failed to open TCP connection to <email>:<num>/app ' \
+      # #148: the email local part stops at `:`, so the URL rule now takes the
+      # whole connection string (it was `<email>:<num>/app`).
+      'Faraday::ConnectionFailed: Failed to open TCP connection to <url> ' \
       '(Authorization: <redacted:authorization> [explicit, handled]'
   }.freeze
 
